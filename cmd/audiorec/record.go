@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -58,7 +59,17 @@ func runRecord(args []string) error {
 
 	var tracks []audiorec.Track
 	if *micFlag != "none" {
-		mic := audiorec.NewMicCapture(audiorec.CaptureConfig{Channels: 1})
+		var cfg audiorec.CaptureConfig
+		if *micFlag == "default" || *micFlag == "" {
+			cfg = audiorec.CaptureConfig{Channels: 1}
+		} else {
+			var err error
+			cfg, err = audiorec.FindCaptureConfig(*micFlag, 1)
+			if err != nil {
+				return fmt.Errorf("resolve --mic %q: %w", *micFlag, err)
+			}
+		}
+		mic := audiorec.NewMicCapture(cfg)
 		tracks = append(tracks, audiorec.Track{
 			Source: mic,
 			Path:   filepath.Join(sessDir, "mic.wav"),
@@ -66,12 +77,29 @@ func runRecord(args []string) error {
 		})
 	}
 	if *systemFlag != "none" {
-		sys := audiorec.NewSystemAudioCapture()
-		tracks = append(tracks, audiorec.Track{
-			Source: sys,
-			Path:   filepath.Join(sessDir, "system.wav"),
-			Label:  "system",
-		})
+		if *systemFlag != "default" && *systemFlag != "" {
+			if runtime.GOOS == "darwin" {
+				return fmt.Errorf("--system: named devices are not supported on macOS (ScreenCaptureKit always uses system default); pass --system default or --system none")
+			}
+			// Linux: resolve the named device via malgo.
+			cfg, err := audiorec.FindCaptureConfig(*systemFlag, 2)
+			if err != nil {
+				return fmt.Errorf("resolve --system %q: %w", *systemFlag, err)
+			}
+			tracks = append(tracks, audiorec.Track{
+				Source: audiorec.NewMicCapture(cfg), // malgo capture works for monitor devices too
+				Path:   filepath.Join(sessDir, "system.wav"),
+				Label:  "system",
+			})
+		} else {
+			// default
+			sys := audiorec.NewSystemAudioCapture()
+			tracks = append(tracks, audiorec.Track{
+				Source: sys,
+				Path:   filepath.Join(sessDir, "system.wav"),
+				Label:  "system",
+			})
+		}
 	}
 
 	sess, err := audiorec.NewSession(audiorec.SessionConfig{

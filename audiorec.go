@@ -59,6 +59,10 @@ type CaptureConfig = malgo.CaptureConfig
 
 func NewMicCapture(cfg CaptureConfig) *malgo.Capture { return malgo.NewCapture(cfg) }
 
+func FindCaptureConfig(query string, channels int) (CaptureConfig, error) {
+	return malgo.FindCaptureConfig(query, channels)
+}
+
 // NewSystemAudioCapture returns a Source for system audio on the current
 // platform. On macOS it uses ScreenCaptureKit; on Linux it uses a malgo
 // capture targeting the default sink's monitor source. Callers that need
