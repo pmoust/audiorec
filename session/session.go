@@ -68,11 +68,12 @@ type Event struct {
 
 // Config is the input to New.
 type Config struct {
-	Tracks        []Track
-	FlushInterval time.Duration // default 2s
-	Logger        *slog.Logger  // nil => no-op
-	WriterFactory WriterFactory // nil => default (wraps wav.Create)
-	OnEvent       func(Event)   // optional
+	Tracks          []Track
+	FlushInterval   time.Duration // default 2s
+	SegmentDuration time.Duration // 0 = no segmentation; > 0 rotates tracks
+	Logger          *slog.Logger  // nil => no-op
+	WriterFactory   WriterFactory // nil => default (wraps wav.Create)
+	OnEvent         func(Event)   // optional
 }
 
 // Session is created by New and executed with Run.
@@ -144,15 +145,25 @@ func (s *Session) Run(ctx context.Context) error {
 		started[i] = true
 	}
 
-	// Phase 2: Create wav writers. Sources' Format() is now stable.
+	// Phase 2: Create initial wav writers. Sources' Format() is now stable.
+	// When segmentation is enabled, start with segment 1; otherwise use paths as-is.
 	writers := make([]Writer, len(s.cfg.Tracks))
+	writerPaths := make([]string, len(s.cfg.Tracks)) // track the path for each writer
 	for i, tr := range s.cfg.Tracks {
-		w, err := s.cfg.WriterFactory(tr.Path, tr.Source.Format())
+		var path string
+		if s.cfg.SegmentDuration > 0 {
+			path = segmentPath(tr.Path, 1)
+		} else {
+			path = tr.Path
+		}
+		writerPaths[i] = path
+
+		w, err := s.cfg.WriterFactory(path, tr.Source.Format())
 		if err != nil {
 			// Rollback: close writers created so far, all sources, remove files.
 			for j := range i {
 				_ = writers[j].Close()
-				_ = os.Remove(s.cfg.Tracks[j].Path)
+				_ = os.Remove(writerPaths[j])
 			}
 			for _, src := range s.cfg.Tracks {
 				_ = src.Source.Close()
@@ -164,21 +175,19 @@ func (s *Session) Run(ctx context.Context) error {
 
 	s.emit(Event{Kind: EventStarted})
 
-	// Phase 3: Writer goroutines + flush ticker + supervisor.
+	// Phase 3: Writer goroutines + supervisor.
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(s.cfg.Tracks))
+	stopCh := make(chan struct{})
 
 	for i := range s.cfg.Tracks {
 		wg.Add(1)
-		go s.runWriter(i, writers[i], &wg, errCh)
+		go s.runWriter(i, writers[i], &wg, errCh, stopCh)
 	}
-
-	stopTicker := make(chan struct{})
-	go s.runFlushTicker(writers, stopTicker)
 
 	// Wait for all writers to exit.
 	wg.Wait()
-	close(stopTicker)
+	close(stopCh)
 	close(errCh)
 
 	// Close every source (harmless if already ended).
@@ -196,43 +205,120 @@ func (s *Session) Run(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// runWriter drains frames from one source into one wav writer. Exits when
-// the source's channel closes. Collects the source's Err() and any write
-// error into errCh.
-func (s *Session) runWriter(i int, w Writer, wg *sync.WaitGroup, errCh chan<- error) {
+// runWriter drains frames from one source into one wav writer. It handles
+// periodic flushing and optional segment rotation. Exits when the source's
+// channel closes. Collects the source's Err() and any write error into errCh.
+func (s *Session) runWriter(i int, w Writer, wg *sync.WaitGroup, errCh chan<- error, stop <-chan struct{}) {
 	defer wg.Done()
 	tr := s.cfg.Tracks[i]
 	tlog := logging.WithTrack(s.log, tr.Label)
 
+	// Per-writer flush ticker and optional segment ticker.
+	flushT := time.NewTicker(s.cfg.FlushInterval)
+	defer flushT.Stop()
+
+	var segT *time.Ticker
+	if s.cfg.SegmentDuration > 0 {
+		segT = time.NewTicker(s.cfg.SegmentDuration)
+		defer segT.Stop()
+	}
+
+	var segTickC <-chan time.Time
+	if segT != nil {
+		segTickC = segT.C
+	}
+
+	framesCh := tr.Source.Frames()
+	segment := 1
 	var writeErr error
-	for f := range tr.Source.Frames() {
-		if err := w.WriteFrame(f); err != nil {
-			writeErr = err
-			tlog.Error("write frame failed", "err", err)
-			s.emit(Event{Kind: EventError, Track: tr.Label, Err: err})
-			// Drain remaining frames so the source goroutine can exit.
-			for range tr.Source.Frames() {
+
+	for {
+		select {
+		case <-stop:
+			_ = w.Close()
+			return
+
+		case f, ok := <-framesCh:
+			if !ok {
+				// Source has ended. Flush before close.
+				if err := w.Flush(); err != nil {
+					tlog.Debug("final flush failed", "err", err)
+					s.emit(Event{Kind: EventError, Track: tr.Label, Err: err})
+				}
+				if closeErr := w.Close(); closeErr != nil && writeErr == nil {
+					writeErr = closeErr
+				}
+				srcErr := tr.Source.Err()
+				s.emit(Event{Kind: EventTrackEnded, Track: tr.Label, Err: firstNonNil(srcErr, writeErr)})
+
+				switch {
+				case srcErr != nil && writeErr != nil:
+					errCh <- fmt.Errorf("track %q: %w (write: %w)", tr.Label, srcErr, writeErr)
+				case srcErr != nil:
+					errCh <- fmt.Errorf("track %q: %w", tr.Label, srcErr)
+				case writeErr != nil:
+					errCh <- fmt.Errorf("track %q: %w", tr.Label, writeErr)
+				default:
+					errCh <- nil
+				}
+				return
 			}
-			break
+
+			if err := w.WriteFrame(f); err != nil {
+				writeErr = err
+				tlog.Error("write frame failed", "err", err)
+				s.emit(Event{Kind: EventError, Track: tr.Label, Err: err})
+				// Drain remaining frames so the source goroutine can exit.
+				for range framesCh {
+				}
+				// Close and finalize with error.
+				_ = w.Close()
+				srcErr := tr.Source.Err()
+				s.emit(Event{Kind: EventTrackEnded, Track: tr.Label, Err: firstNonNil(srcErr, writeErr)})
+
+				switch {
+				case srcErr != nil && writeErr != nil:
+					errCh <- fmt.Errorf("track %q: %w (write: %w)", tr.Label, srcErr, writeErr)
+				case srcErr != nil:
+					errCh <- fmt.Errorf("track %q: %w", tr.Label, srcErr)
+				case writeErr != nil:
+					errCh <- fmt.Errorf("track %q: %w", tr.Label, writeErr)
+				default:
+					errCh <- nil
+				}
+				return
+			}
+
+		case <-flushT.C:
+			if err := w.Flush(); err != nil {
+				tlog.Debug("flush failed", "err", err)
+				s.emit(Event{Kind: EventError, Track: tr.Label, Err: err})
+			}
+			s.emit(Event{Kind: EventFlushed})
+
+		case <-segTickC:
+			// Rotate: close current, open next.
+			if err := w.Flush(); err == nil {
+				_ = w.Close()
+			} else {
+				_ = w.Close()
+			}
+
+			segment++
+			newPath := segmentPath(tr.Path, segment)
+			newW, err := s.cfg.WriterFactory(newPath, tr.Source.Format())
+			if err != nil {
+				tlog.Error("segment rotation failed", "segment", segment, "err", err)
+				s.emit(Event{Kind: EventError, Track: tr.Label, Err: err})
+				// Drain remaining frames and exit.
+				for range framesCh {
+				}
+				return
+			}
+
+			w = newW
+			s.emit(Event{Kind: EventSegmentRotated, Track: tr.Label})
 		}
-	}
-	// Final flush + close happens here on the same goroutine → no races.
-	if closeErr := w.Close(); closeErr != nil && writeErr == nil {
-		writeErr = closeErr
-	}
-
-	srcErr := tr.Source.Err()
-	s.emit(Event{Kind: EventTrackEnded, Track: tr.Label, Err: firstNonNil(srcErr, writeErr)})
-
-	switch {
-	case srcErr != nil && writeErr != nil:
-		errCh <- fmt.Errorf("track %q: %w (write: %w)", tr.Label, srcErr, writeErr)
-	case srcErr != nil:
-		errCh <- fmt.Errorf("track %q: %w", tr.Label, srcErr)
-	case writeErr != nil:
-		errCh <- fmt.Errorf("track %q: %w", tr.Label, writeErr)
-	default:
-		errCh <- nil
 	}
 }
 
@@ -241,27 +327,6 @@ func firstNonNil(a, b error) error {
 		return a
 	}
 	return b
-}
-
-// runFlushTicker periodically calls Flush on every writer. Exits when stop
-// is closed.
-func (s *Session) runFlushTicker(writers []Writer, stop <-chan struct{}) {
-	t := time.NewTicker(s.cfg.FlushInterval)
-	defer t.Stop()
-	for {
-		select {
-		case <-stop:
-			return
-		case <-t.C:
-			for i, w := range writers {
-				if err := w.Flush(); err != nil {
-					s.log.Debug("flush failed", "track", s.cfg.Tracks[i].Label, "err", err)
-					s.emit(Event{Kind: EventError, Track: s.cfg.Tracks[i].Label, Err: err})
-				}
-			}
-			s.emit(Event{Kind: EventFlushed})
-		}
-	}
 }
 
 func (s *Session) emit(ev Event) {
