@@ -68,4 +68,5 @@ var (
 	ErrDeviceDisconnected = errors.New("audiorec: device disconnected")
 	ErrUnsupportedFormat  = errors.New("audiorec: unsupported format")
 	ErrUnsupportedOS      = errors.New("audiorec: backend not supported on this OS")
+	ErrBackendFailure     = errors.New("audiorec: backend failure")
 )

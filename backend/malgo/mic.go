@@ -36,12 +36,14 @@ type Capture struct {
 	frames chan source.Frame
 	format source.Format
 
-	mu      sync.Mutex
-	err     error
-	started bool
-	closed  bool
-	drops   int64
-	closeCh chan struct{}
+	mu                    sync.Mutex
+	err                   error
+	started               bool
+	closed                bool
+	drops                 int64
+	closeCh               chan struct{}
+	stoppingIntentionally bool // protected by mu
+	deviceStoppedCh       chan struct{}
 }
 
 func (c *Capture) Format() source.Format { return c.format }
@@ -72,6 +74,7 @@ func (c *Capture) Start(ctx context.Context) error {
 
 	c.frames = make(chan source.Frame, 32)
 	c.closeCh = make(chan struct{})
+	c.deviceStoppedCh = make(chan struct{})
 
 	onData := func(_, input []byte, frameCount uint32) {
 		// Copy because malgo reuses this buffer on subsequent callbacks.
@@ -100,7 +103,22 @@ func (c *Capture) Start(ctx context.Context) error {
 		}
 	}
 
-	dev, err := ma.InitDevice(maCtx.Context, devCfg, ma.DeviceCallbacks{Data: onData})
+	onStop := func() {
+		c.mu.Lock()
+		intentional := c.stoppingIntentionally
+		if !intentional && c.err == nil {
+			c.err = fmt.Errorf("%w: malgo device stopped", source.ErrDeviceDisconnected)
+		}
+		c.mu.Unlock()
+		// Signal watcher; safe under select-default guard.
+		select {
+		case <-c.deviceStoppedCh:
+		default:
+			close(c.deviceStoppedCh)
+		}
+	}
+
+	dev, err := ma.InitDevice(maCtx.Context, devCfg, ma.DeviceCallbacks{Data: onData, Stop: onStop})
 	if err != nil {
 		_ = maCtx.Uninit()
 		maCtx.Free()
@@ -129,6 +147,7 @@ func (c *Capture) Start(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 		case <-c.closeCh:
+		case <-c.deviceStoppedCh:
 		}
 		c.stopDevice()
 	}()
@@ -145,6 +164,7 @@ func (c *Capture) stopDevice() {
 		return
 	}
 	c.closed = true
+	c.stoppingIntentionally = true
 	dev, mctx, ch := c.dev, c.ctx, c.frames
 	c.mu.Unlock()
 

@@ -6,6 +6,7 @@ import (
 	"context"
 
 	"github.com/pmoust/audiorec/backend/malgo"
+	_ "github.com/pmoust/audiorec/backend/sck" // compile sck stub on non-darwin
 )
 
 // newSystemAudioDefault returns a Source capturing the Linux default sink's

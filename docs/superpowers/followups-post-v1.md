@@ -13,6 +13,18 @@ This list was produced by the final architectural review of the Wave 0–E imple
 
 The project is now ready for a v1 tag. The remaining items below are v1.1 material.
 
+## Status: v1.1 fix wave landed 2026-04-06
+
+- ✅ **P3** — fixed in `8673a49` (malgo Capture.Err() wired to onStop callback via deviceStoppedCh)
+- ✅ **P4** — fixed in `988feda` (sck error codes 2/3/4 wrapped in new source.ErrBackendFailure sentinel; code 2 uses ErrDeviceNotFound)
+- ✅ **P5** — fixed in `f89c281` (TestMapError pins classification strings)
+- ✅ **P6** — fixed in `404c9a4` (sck import moved to platform files via blank import in audiorec_linux.go)
+- ✅ **P7** — fixed in `3796999` (flush ticker emits EventError on flush failures)
+- ✅ **Test gap A** — fixed in `24463a1` (TestRun_WavCreateFailure_RollsBackCleanly covers Phase-2 rollback)
+- ⬜ **Test gap B** — runFlushTicker error-path test deferred (hard to simulate without a writer injection seam)
+- ⬜ **Test gap C** — end-to-end malgo capture test deferred (requires real hardware in CI)
+- ⬜ **Test gap D** — sck Obj-C bridge automation deferred (requires signed bundle + TCC-primed runner)
+
 ## Before tagging v1 (✅ all resolved)
 
 ### S1 — Linux system-audio default captures the mic, not the monitor
