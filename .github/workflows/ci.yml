@@ -1,0 +1,234 @@
+name: CI
+
+# CI pipeline for audiorec.
+#
+# Jobs:
+#   lint         — gofmt + go vet + go mod tidy/verify hygiene (Linux)
+#   test         — build + race test + coverage on Linux and macOS
+#   cli-smoke    — build the CLI binary on both platforms and run lightweight
+#                  smoke tests (no args, devices, record -h, unknown command)
+#   macos-bundle — run `make app` to verify the .app target + plutil + codesign
+#   ci-success   — aggregate dependency for branch protection
+#
+# cgo notes:
+#   - malgo/miniaudio uses runtime dlopen for ALSA/PulseAudio/JACK on Linux,
+#     so no -dev packages are needed at compile time (only -ldl -lpthread -lm
+#     which the default toolchain provides).
+#   - macOS builds need Xcode command-line tools for the ScreenCaptureKit
+#     framework headers; these are pre-installed on github-hosted macOS runners.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "::error::gofmt found unformatted files:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go mod verify
+        run: go mod verify
+
+      - name: go mod tidy (no diff)
+        run: |
+          go mod tidy
+          if ! git diff --exit-code go.mod go.sum; then
+            echo "::error::go mod tidy produced changes; commit them"
+            exit 1
+          fi
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test (race + coverage)
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage.out
+          if-no-files-found: warn
+          retention-days: 7
+
+  cli-smoke:
+    name: CLI smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build CLI
+        run: make build
+
+      - name: Smoke — no args exits 2
+        run: |
+          set +e
+          ./audiorec
+          rc=$?
+          set -e
+          if [ "$rc" -ne 2 ]; then
+            echo "::error::expected exit 2 for no-args, got $rc"
+            exit 1
+          fi
+
+      - name: Smoke — unknown command exits 2
+        run: |
+          set +e
+          ./audiorec bogus-subcommand
+          rc=$?
+          set -e
+          if [ "$rc" -ne 2 ]; then
+            echo "::error::expected exit 2 for unknown command, got $rc"
+            exit 1
+          fi
+
+      - name: Smoke — devices subcommand runs
+        # In headless CI there's no audio server; the command should either
+        # print "(no devices found)" or a device list. Either way it exits 0.
+        run: ./audiorec devices
+
+      - name: Smoke — record help prints usage
+        # `record -h` exits 1 (flag.ErrHelp) but must print the flag list on
+        # stderr. Grep makes this exit-code-independent.
+        run: ./audiorec record -h 2>&1 | grep -q "Usage: audiorec record"
+
+      - name: Smoke — named mic on unknown device errors cleanly
+        run: |
+          set +e
+          out=$(./audiorec record -o /tmp/audiorec-ci-test --mic "definitely-does-not-exist-$(date +%s)" --system none 2>&1)
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::expected non-zero exit for unknown device; got 0"
+            echo "$out"
+            exit 1
+          fi
+          echo "$out" | grep -q "device not found" || {
+            echo "::error::error message did not include 'device not found'"
+            echo "$out"
+            exit 1
+          }
+
+      - name: Rename binary for artifact
+        run: mv audiorec audiorec-${{ matrix.os }}
+
+      - name: Upload CLI binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: audiorec-${{ matrix.os }}
+          path: audiorec-${{ matrix.os }}
+          if-no-files-found: error
+          retention-days: 14
+
+  macos-bundle:
+    name: macOS .app bundle
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build .app bundle
+        run: make app
+
+      - name: Verify bundle layout
+        run: |
+          test -x dist/audiorec.app/Contents/MacOS/audiorec
+          test -f dist/audiorec.app/Contents/Info.plist
+
+      - name: Lint Info.plist
+        run: plutil -lint dist/audiorec.app/Contents/Info.plist
+
+      - name: Verify code signature
+        run: codesign -dv dist/audiorec.app
+
+      - name: Smoke test bundled binary
+        run: ./dist/audiorec.app/Contents/MacOS/audiorec devices
+
+      - name: Upload .app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: audiorec.app
+          path: dist/audiorec.app
+          if-no-files-found: error
+          retention-days: 14
+
+  ci-success:
+    # Aggregate gate for branch protection: require this single check on main.
+    # It turns green only if every real job succeeds.
+    name: CI success
+    runs-on: ubuntu-latest
+    needs: [lint, test, cli-smoke, macos-bundle]
+    if: always()
+    steps:
+      - name: Check dependent job results
+        run: |
+          if [ "${{ needs.lint.result }}" != "success" ] \
+             || [ "${{ needs.test.result }}" != "success" ] \
+             || [ "${{ needs.cli-smoke.result }}" != "success" ] \
+             || [ "${{ needs.macos-bundle.result }}" != "success" ]; then
+            echo "::error::one or more CI jobs failed"
+            echo "lint=${{ needs.lint.result }}"
+            echo "test=${{ needs.test.result }}"
+            echo "cli-smoke=${{ needs.cli-smoke.result }}"
+            echo "macos-bundle=${{ needs.macos-bundle.result }}"
+            exit 1
+          fi
+          echo "All CI jobs passed."
