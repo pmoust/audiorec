@@ -19,13 +19,14 @@ import (
 func runRecord(args []string) error {
 	fs := flag.NewFlagSet("record", flag.ContinueOnError)
 	var (
-		outDir        = fs.String("o", "", "output directory (required)")
-		sessionName   = fs.String("session-name", "", "session subdirectory name (default: timestamp)")
-		micFlag       = fs.String("mic", "default", `microphone: "default", "none", or a device name`)
-		systemFlag    = fs.String("system", "default", `system audio: "default", "none", or a device name`)
-		duration      = fs.Duration("d", 0, "optional hard-stop duration (e.g. 30m); 0 = record until SIGINT")
-		flushInterval = fs.Duration("flush-interval", 2*time.Second, "WAV header flush interval")
-		verbose       = fs.Bool("v", false, "verbose (debug) logging")
+		outDir          = fs.String("o", "", "output directory (required)")
+		sessionName     = fs.String("session-name", "", "session subdirectory name (default: timestamp)")
+		micFlag         = fs.String("mic", "default", `microphone: "default", "none", or a device name`)
+		systemFlag      = fs.String("system", "default", `system audio: "default", "none", or a device name`)
+		duration        = fs.Duration("d", 0, "optional hard-stop duration (e.g. 30m); 0 = record until SIGINT")
+		flushInterval   = fs.Duration("flush-interval", 2*time.Second, "WAV header flush interval")
+		segmentDuration = fs.Duration("segment-duration", 0, "rotate per-track output files every DURATION (e.g. 10m, 1h); 0 = no segmentation")
+		verbose         = fs.Bool("v", false, "verbose (debug) logging")
 	)
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: audiorec record -o DIR [flags]")
@@ -103,9 +104,10 @@ func runRecord(args []string) error {
 	}
 
 	sess, err := audiorec.NewSession(audiorec.SessionConfig{
-		Tracks:        tracks,
-		FlushInterval: *flushInterval,
-		Logger:        logger,
+		Tracks:          tracks,
+		FlushInterval:   *flushInterval,
+		SegmentDuration: *segmentDuration,
+		Logger:          logger,
 	})
 	if err != nil {
 		return err
