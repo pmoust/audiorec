@@ -25,7 +25,7 @@ The project is now ready for a v1 tag. The remaining items below are v1.1 materi
 ## Status: v1.2 test coverage wave landed 2026-04-06
 
 - ✅ **Test gap B** — fixed in `517e792` (WriterFactory injection seam + TestRun_FlushTickerError_EmitsEventErrorAndContinues)
-- ✅ **Test gap C** — fixed in `5318719` (TestCapture_NullBackend_EndToEnd via CaptureConfig.Backends and ma.BackendNull; skips on platforms where null backend unavailable)
+- ✅ **Test gap C** — fixed in `5318719` + `568dc26` (TestCapture_NullBackend_EndToEnd via CaptureConfig.Backends plus a local `backendNullFixed = ma.Backend(14)` constant. The fixup works around a malgo v0.11.24 enum bug where `malgo.BackendNull` resolves to `ma_backend_custom` in the C enum; remove once malgo fixes upstream. Test runs on every platform, no skips.)
 - ✅ **Test gap D** — fixed in `9fbf98b` (TestMapSCKError + TestSCKRegistry; pure-Go coverage of sck bridge; full Obj-C automation still deferred as it requires TCC-primed signed bundles)
 
 ## Before tagging v1 (✅ all resolved)
