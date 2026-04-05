@@ -11,9 +11,10 @@ coverage.out
 # macOS .app build output
 /dist/
 
-# IDE
+# IDE / agent harness
 .vscode/
 .idea/
+.claude/
 *.swp
 
 # OS junk
