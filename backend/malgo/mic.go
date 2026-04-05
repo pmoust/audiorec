@@ -178,11 +178,18 @@ func (c *Capture) Drops() int64 {
 }
 
 func (c *Capture) Close() error {
+	c.mu.Lock()
+	ch := c.closeCh
+	c.mu.Unlock()
+	if ch == nil {
+		// Close called before Start; interface contract says this is safe.
+		return nil
+	}
 	select {
-	case <-c.closeCh:
+	case <-ch:
 		// already closing
 	default:
-		close(c.closeCh)
+		close(ch)
 	}
 	return nil
 }
