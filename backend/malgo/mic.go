@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	ma "github.com/gen2brain/malgo"
 	"github.com/pmoust/audiorec/source"
@@ -134,7 +133,6 @@ func (c *Capture) Start(ctx context.Context) error {
 		c.stopDevice()
 	}()
 
-	_ = unsafe.Pointer(nil) // silence unused-import on some toolchains
 	return nil
 }
 
