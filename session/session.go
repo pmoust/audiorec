@@ -55,6 +55,7 @@ const (
 	EventFrameDropped
 	EventTrackEnded
 	EventError
+	EventSegmentRotated
 )
 
 // Event is delivered to Config.OnEvent when non-nil.
