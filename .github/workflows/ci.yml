@@ -3,12 +3,25 @@ name: CI
 # CI pipeline for audiorec.
 #
 # Jobs:
-#   lint         — gofmt + go vet + go mod tidy/verify hygiene (Linux)
-#   test         — build + race test + coverage on Linux and macOS
-#   cli-smoke    — build the CLI binary on both platforms and run lightweight
-#                  smoke tests (no args, devices, record -h, unknown command)
-#   macos-bundle — run `make app` to verify the .app target + plutil + codesign
-#   ci-success   — aggregate dependency for branch protection
+#   lint           — gofmt + go vet + go mod tidy/verify hygiene (Linux)
+#   golangci-lint  — curated linter set per .golangci.yml
+#   test           — build + race test + coverage on Linux and macOS across
+#                    a Go-version matrix (single entry today, see below)
+#   cli-smoke      — build the CLI binary on both platforms and run
+#                    lightweight smoke tests (no args, devices, record -h,
+#                    unknown command, unknown device)
+#   macos-bundle   — run `make app` to verify the .app target + plutil +
+#                    codesign, then smoke test the bundled binary
+#   ci-success     — aggregate dependency for branch protection
+#
+# Go version matrix:
+#   The matrix `go` axis accepts either the literal string "go.mod" (reads
+#   the version from the repo's go.mod via actions/setup-go's go-version-file)
+#   or any value accepted by setup-go's go-version input (e.g. "1.25.x",
+#   "stable", "oldstable"). Today it has a single "go.mod" entry, so CI
+#   tracks go.mod's declared floor automatically. To test across multiple
+#   toolchains, add entries to the `go:` list — no other workflow changes
+#   needed.
 #
 # cgo notes:
 #   - malgo/miniaudio uses runtime dlopen for ALSA/PulseAudio/JACK on Linux,
@@ -66,19 +79,42 @@ jobs:
             exit 1
           fi
 
-  test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+  golangci-lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: false # golangci-lint-action manages its own cache
+
+      - name: golangci-lint
+      # Pinned to the version developers use locally (brew/golangci-lint 2.x).
+      # Bump in lockstep with local upgrades.
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.11.4
+
+  test:
+    name: Test (${{ matrix.os }}, go=${{ matrix.go }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # "go.mod" reads the version from go.mod. Add more entries (e.g.
+        # "1.25.x", "stable") to run the test suite against additional
+        # toolchains — no other step changes required.
+        go: ["go.mod"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go != 'go.mod' && matrix.go || '' }}
+          go-version-file: ${{ matrix.go == 'go.mod' && 'go.mod' || '' }}
           cache: true
 
       - name: Build
@@ -91,7 +127,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-${{ matrix.os }}
+          name: coverage-${{ matrix.os }}-${{ matrix.go }}
           path: coverage.out
           if-no-files-found: warn
           retention-days: 7
@@ -215,17 +251,19 @@ jobs:
     # It turns green only if every real job succeeds.
     name: CI success
     runs-on: ubuntu-latest
-    needs: [lint, test, cli-smoke, macos-bundle]
+    needs: [lint, golangci-lint, test, cli-smoke, macos-bundle]
     if: always()
     steps:
       - name: Check dependent job results
         run: |
           if [ "${{ needs.lint.result }}" != "success" ] \
+             || [ "${{ needs.golangci-lint.result }}" != "success" ] \
              || [ "${{ needs.test.result }}" != "success" ] \
              || [ "${{ needs.cli-smoke.result }}" != "success" ] \
              || [ "${{ needs.macos-bundle.result }}" != "success" ]; then
             echo "::error::one or more CI jobs failed"
             echo "lint=${{ needs.lint.result }}"
+            echo "golangci-lint=${{ needs.golangci-lint.result }}"
             echo "test=${{ needs.test.result }}"
             echo "cli-smoke=${{ needs.cli-smoke.result }}"
             echo "macos-bundle=${{ needs.macos-bundle.result }}"

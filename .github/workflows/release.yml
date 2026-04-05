@@ -1,0 +1,221 @@
+name: Release
+
+# Auto-release on tag push.
+#
+# Trigger: pushing a tag matching `v*` (e.g. `v1.0.0`, `v1.2.3-rc1`).
+#
+# Pipeline:
+#   1. test     — run the full race test suite on the tagged commit on
+#                 both Linux and macOS. Gates the build jobs.
+#   2. build    — matrix over platform; `make build`, package as .tar.gz
+#                 with a SHA256 sidecar, upload as an artifact.
+#   3. bundle   — macOS-only; `make app`, zip the .app bundle with a
+#                 SHA256 sidecar, upload as an artifact.
+#   4. release  — download every artifact, create a GitHub Release at
+#                 the tag, attach all archives + checksums, auto-generate
+#                 release notes from commits since the previous tag.
+#
+# Platforms: linux-amd64 and darwin-arm64. The github-hosted macos-latest
+# runner is arm64 as of macOS 14+. To add darwin-amd64, extend the matrix
+# with macos-13 (which is still amd64). To add linux-arm64, either use a
+# self-hosted runner or the setup-qemu / docker buildx route.
+#
+# Signing / notarization:
+#   macOS .app bundles are ad-hoc signed via the Makefile's `make app`
+#   target (`codesign --sign -`). This is sufficient for local dev and CI
+#   verification but will trigger Gatekeeper warnings on end-user machines.
+#   Proper notarization requires an Apple Developer ID and is out of scope
+#   for v1 releases — pursue via `apple-actions/import-codesign-certs` +
+#   `xcrun notarytool` when needed.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re-)release (e.g. v1.0.0)"
+        required: true
+
+permissions:
+  contents: write # gh release create needs this
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false # never cancel an in-flight release
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test (race)
+        run: go test -race -count=1 ./...
+
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs: [test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-amd64
+          - os: macos-latest
+            target: darwin-arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build binary
+        run: make build
+
+      - name: Package tarball
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+          name="audiorec-${tag}-${{ matrix.target }}"
+          mkdir -p dist
+          # Assemble archive contents: the binary plus README; include
+          # LICENSE if one exists at the repo root.
+          files="audiorec README.md"
+          if [ -f LICENSE ]; then files="$files LICENSE"; fi
+          tar -czf "dist/${name}.tar.gz" $files
+          shasum -a 256 "dist/${name}.tar.gz" > "dist/${name}.tar.gz.sha256"
+          ls -la dist/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  bundle:
+    name: macOS .app bundle
+    runs-on: macos-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build .app bundle
+        run: make app
+
+      - name: Verify bundle layout
+        run: |
+          test -x dist/audiorec.app/Contents/MacOS/audiorec
+          test -f dist/audiorec.app/Contents/Info.plist
+          plutil -lint dist/audiorec.app/Contents/Info.plist
+          codesign -dv dist/audiorec.app
+
+      - name: Package .app as zip
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+          name="audiorec-${tag}-darwin-arm64-app"
+          cd dist
+          zip -ry "${name}.zip" audiorec.app
+          shasum -a 256 "${name}.zip" > "${name}.zip.sha256"
+          ls -la
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle
+          path: dist/*.zip*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs: [build, bundle]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0 # --generate-notes needs tag history
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Inspect artifacts
+        run: ls -la artifacts/
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Idempotency: if a release already exists for this tag (e.g. a
+          # re-run triggered via workflow_dispatch), upload assets to it
+          # instead of failing on duplicate-create.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; uploading assets with --clobber"
+            gh release upload "$TAG" artifacts/* --clobber
+          else
+            gh release create "$TAG" artifacts/* \
+              --title "$TAG" \
+              --generate-notes \
+              --verify-tag
+          fi
