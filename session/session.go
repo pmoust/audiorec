@@ -1,3 +1,8 @@
+// Note on backpressure: Session does NOT drop frames. If a backend delivers
+// frames faster than the writer can consume, the backend itself is responsible
+// for dropping on its internal ring buffer and reporting via EventFrameDropped.
+// The session simply writes every frame it receives on Frames().
+//
 // Package session orchestrates one or more audio Sources into crash-safe
 // WAV files. A Session takes a set of Tracks, starts every Source, and
 // spawns one writer goroutine per track plus a shared flush ticker.
