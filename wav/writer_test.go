@@ -87,3 +87,68 @@ func TestCreate_WritesValidEmptyHeader(t *testing.T) {
 		t.Errorf("data size: got %d want 0", got)
 	}
 }
+
+func TestWriteFrame_AppendsPCMAndCountsBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "append.wav")
+
+	w, err := Create(path, source.Format{
+		SampleRate:    48000,
+		Channels:      1,
+		BitsPerSample: 16,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// 10 mono 16-bit samples = 20 bytes
+	pcm := make([]byte, 20)
+	for i := range pcm {
+		pcm[i] = byte(i)
+	}
+	if err := w.WriteFrame(source.Frame{Data: pcm, NumFrames: 10}); err != nil {
+		t.Fatalf("WriteFrame: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if len(b) != headerSize+20 {
+		t.Fatalf("file size: got %d want %d", len(b), headerSize+20)
+	}
+	// PCM bytes should match what we wrote.
+	for i := 0; i < 20; i++ {
+		if b[headerSize+i] != byte(i) {
+			t.Errorf("pcm[%d]: got %d want %d", i, b[headerSize+i], i)
+		}
+	}
+	// Header length fields should reflect 20 bytes of data.
+	if got := binary.LittleEndian.Uint32(b[riffSizeOff : riffSizeOff+4]); got != 36+20 {
+		t.Errorf("riff size: got %d want %d", got, 36+20)
+	}
+	if got := binary.LittleEndian.Uint32(b[dataSizeOff : dataSizeOff+4]); got != 20 {
+		t.Errorf("data size: got %d want 20", got)
+	}
+}
+
+func TestWriteFrame_RejectsMisalignedData(t *testing.T) {
+	dir := t.TempDir()
+	w, err := Create(filepath.Join(dir, "x.wav"), source.Format{
+		SampleRate:    48000,
+		Channels:      2,
+		BitsPerSample: 16,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer w.Close()
+	// 3 bytes is not a multiple of 4 (stereo 16-bit block align).
+	err = w.WriteFrame(source.Frame{Data: []byte{1, 2, 3}, NumFrames: 0})
+	if err == nil {
+		t.Fatalf("expected error for misaligned data")
+	}
+}

@@ -129,3 +129,28 @@ func (w *Writer) Close() error {
 	closeErr := w.f.Close()
 	return errors.Join(hdrErr, syncErr, closeErr)
 }
+
+// WriteFrame appends f.Data to the file and updates the in-memory byte
+// counter. It does NOT rewrite the header — call Flush periodically for
+// crash safety. A single Write syscall per frame.
+//
+// Returns an error if Data is not a multiple of the format's block align,
+// which would corrupt the stream.
+func (w *Writer) WriteFrame(f source.Frame) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return errors.New("wav: WriteFrame on closed writer")
+	}
+	blockAlign := w.fmt.BytesPerFrame()
+	if blockAlign > 0 && len(f.Data)%blockAlign != 0 {
+		return fmt.Errorf("wav: frame data length %d not a multiple of block align %d",
+			len(f.Data), blockAlign)
+	}
+	n, err := w.f.WriteAt(f.Data, headerSize+w.bytesWritten)
+	if err != nil {
+		return fmt.Errorf("wav: write frame: %w", err)
+	}
+	w.bytesWritten += int64(n)
+	return nil
+}
