@@ -1,0 +1,57 @@
+version: 2
+
+# Dependabot configuration for audiorec.
+#
+# Two ecosystems to track:
+#   - gomod:         Go module dependencies (miniaudio bindings, future deps)
+#   - github-actions: pinned action versions in .github/workflows/*.yml
+#
+# Weekly cadence is low-noise for a small project. Bump to "daily" if the
+# project grows enough that weekly updates accumulate uncomfortably.
+
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: "Europe/Athens"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+      include: scope
+    labels:
+      - dependencies
+      - gomod
+    groups:
+      # Group minor/patch bumps into a single PR to cut review overhead;
+      # major bumps stay individual because they usually need manual review.
+      gomod-minor:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: "Europe/Athens"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: scope
+    labels:
+      - dependencies
+      - github-actions
+    groups:
+      actions-minor:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

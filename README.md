@@ -1,5 +1,8 @@
 # audiorec
 
+[![CI](https://github.com/pmoust/audiorec/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pmoust/audiorec/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Go library and CLI for recording microphone + system audio as separate crash-safe WAV files on macOS and Linux. Designed for meeting and interview capture.
 
 ## Features
