@@ -63,3 +63,55 @@ func TestSCKRegistry(t *testing.T) {
 	}
 	unregister(id2)
 }
+
+func TestNewSystemAudioWithConfig(t *testing.T) {
+	// Test that NewSystemAudioWithConfig stores the config correctly.
+	cases := []struct {
+		name   string
+		config SystemAudioConfig
+	}{
+		{
+			name:   "empty config",
+			config: SystemAudioConfig{},
+		},
+		{
+			name: "include single bundle",
+			config: SystemAudioConfig{
+				IncludeBundleIDs: []string{"com.apple.Safari"},
+			},
+		},
+		{
+			name: "exclude multiple bundles",
+			config: SystemAudioConfig{
+				ExcludeBundleIDs: []string{"com.apple.Terminal", "com.apple.Music"},
+			},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cap := NewSystemAudioWithConfig(c.config)
+			if cap.config.IncludeBundleIDs != nil {
+				if len(cap.config.IncludeBundleIDs) != len(c.config.IncludeBundleIDs) {
+					t.Errorf("IncludeBundleIDs length mismatch: got %d, want %d",
+						len(cap.config.IncludeBundleIDs), len(c.config.IncludeBundleIDs))
+				}
+				for i, s := range cap.config.IncludeBundleIDs {
+					if s != c.config.IncludeBundleIDs[i] {
+						t.Errorf("IncludeBundleIDs[%d] = %q; want %q", i, s, c.config.IncludeBundleIDs[i])
+					}
+				}
+			}
+			if cap.config.ExcludeBundleIDs != nil {
+				if len(cap.config.ExcludeBundleIDs) != len(c.config.ExcludeBundleIDs) {
+					t.Errorf("ExcludeBundleIDs length mismatch: got %d, want %d",
+						len(cap.config.ExcludeBundleIDs), len(c.config.ExcludeBundleIDs))
+				}
+				for i, s := range cap.config.ExcludeBundleIDs {
+					if s != c.config.ExcludeBundleIDs[i] {
+						t.Errorf("ExcludeBundleIDs[%d] = %q; want %q", i, s, c.config.ExcludeBundleIDs[i])
+					}
+				}
+			}
+		})
+	}
+}

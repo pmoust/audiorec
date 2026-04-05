@@ -11,10 +11,10 @@ import (
 // Format describes a PCM stream. audiorec never resamples in v1, so every
 // backend reports whatever its device natively delivers.
 type Format struct {
-	SampleRate    int  // e.g. 48000, 44100
-	Channels      int  // 1 = mono, 2 = stereo, ...
-	BitsPerSample int  // 16 or 32
-	Float         bool // true => 32-bit float PCM; false => signed integer PCM
+	SampleRate    int  `json:"sample_rate"`
+	Channels      int  `json:"channels"`
+	BitsPerSample int  `json:"bits_per_sample"`
+	Float         bool `json:"float"`
 }
 
 // BytesPerFrame returns the number of bytes for one sample across all channels.

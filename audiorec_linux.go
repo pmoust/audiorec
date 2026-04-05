@@ -20,6 +20,12 @@ func newSystemAudioDefault() Source {
 	return malgo.NewCapture(cfg)
 }
 
+// newSystemAudioWithConfig ignores the config on Linux and returns the
+// default system audio source. Per-app filtering is not supported on Linux.
+func newSystemAudioWithConfig(cfg SystemAudioConfig) Source {
+	return newSystemAudioDefault()
+}
+
 type failingSource struct {
 	err error
 	ch  chan Frame

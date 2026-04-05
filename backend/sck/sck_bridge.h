@@ -24,6 +24,17 @@ sck_capture_t* sck_capture_create(sck_audio_cb cb, void* user);
 // On success, cb begins firing on a background queue.
 int sck_capture_start(sck_capture_t* c);
 
+// sck_capture_start_filtered is like sck_capture_start but accepts an
+// optional list of application bundle identifiers to include or exclude
+// from audio capture. bundleIDs is a C array of NUL-terminated strings;
+// bundleIDCount is the element count. If include is nonzero the filter
+// includes only matching apps; if zero it excludes them. If bundleIDCount
+// is 0 the filter is equivalent to sck_capture_start (capture everything).
+int sck_capture_start_filtered(sck_capture_t* c,
+                               const char** bundleIDs,
+                               int bundleIDCount,
+                               int include);
+
 // sck_capture_stop stops the stream and blocks until the last audio
 // callback has returned. Safe to call multiple times.
 void sck_capture_stop(sck_capture_t* c);

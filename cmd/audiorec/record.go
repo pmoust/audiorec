@@ -10,22 +10,29 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/pmoust/audiorec"
+	"github.com/pmoust/audiorec/flac"
+	"github.com/pmoust/audiorec/session"
 )
 
 func runRecord(args []string) error {
 	fs := flag.NewFlagSet("record", flag.ContinueOnError)
 	var (
-		outDir        = fs.String("o", "", "output directory (required)")
-		sessionName   = fs.String("session-name", "", "session subdirectory name (default: timestamp)")
-		micFlag       = fs.String("mic", "default", `microphone: "default", "none", or a device name`)
-		systemFlag    = fs.String("system", "default", `system audio: "default", "none", or a device name`)
-		duration      = fs.Duration("d", 0, "optional hard-stop duration (e.g. 30m); 0 = record until SIGINT")
-		flushInterval = fs.Duration("flush-interval", 2*time.Second, "WAV header flush interval")
-		verbose       = fs.Bool("v", false, "verbose (debug) logging")
+		outDir          = fs.String("o", "", "output directory (required)")
+		sessionName     = fs.String("session-name", "", "session subdirectory name (default: timestamp)")
+		micFlag         = fs.String("mic", "default", `microphone: "default", "none", or a device name`)
+		systemFlag      = fs.String("system", "default", `system audio: "default", "none", or a device name`)
+		includeApps     = fs.String("include-app", "", "macOS only: comma-separated bundle identifiers to capture audio from (mutually exclusive with --exclude-app)")
+		excludeApps     = fs.String("exclude-app", "", "macOS only: comma-separated bundle identifiers to exclude from audio capture (mutually exclusive with --include-app)")
+		duration        = fs.Duration("d", 0, "optional hard-stop duration (e.g. 30m); 0 = record until SIGINT")
+		flushInterval   = fs.Duration("flush-interval", 2*time.Second, "WAV header flush interval")
+		segmentDuration = fs.Duration("segment-duration", 0, "rotate per-track output files every DURATION (e.g. 10m, 1h); 0 = no segmentation")
+		format          = fs.String("format", "wav", `output format: "wav" or "flac" (note: FLAC does not support float PCM, e.g. macOS system audio)`)
+		verbose         = fs.Bool("v", false, "verbose (debug) logging")
 	)
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: audiorec record -o DIR [flags]")
@@ -40,6 +47,15 @@ func runRecord(args []string) error {
 	}
 	if *micFlag == "none" && *systemFlag == "none" {
 		return errors.New("at least one of --mic or --system must be enabled")
+	}
+	if *format != "wav" && *format != "flac" {
+		return fmt.Errorf("--format must be \"wav\" or \"flac\", got %q", *format)
+	}
+	if *includeApps != "" && *excludeApps != "" {
+		return errors.New("--include-app and --exclude-app are mutually exclusive")
+	}
+	if (*includeApps != "" || *excludeApps != "") && runtime.GOOS != "darwin" {
+		return errors.New("--include-app and --exclude-app are only supported on macOS")
 	}
 
 	level := slog.LevelInfo
@@ -57,6 +73,20 @@ func runRecord(args []string) error {
 		return fmt.Errorf("mkdir %s: %w", sessDir, err)
 	}
 
+	// Determine file extension based on format.
+	var fileExt string
+	var writerFactory session.WriterFactory
+	switch *format {
+	case "wav":
+		fileExt = ".wav"
+		writerFactory = nil // nil => default (uses wav.Create)
+	case "flac":
+		fileExt = ".flac"
+		writerFactory = func(path string, f audiorec.Format) (session.Writer, error) {
+			return flac.Create(path, f)
+		}
+	}
+
 	var tracks []audiorec.Track
 	if *micFlag != "none" {
 		var cfg audiorec.CaptureConfig
@@ -72,7 +102,7 @@ func runRecord(args []string) error {
 		mic := audiorec.NewMicCapture(cfg)
 		tracks = append(tracks, audiorec.Track{
 			Source: mic,
-			Path:   filepath.Join(sessDir, "mic.wav"),
+			Path:   filepath.Join(sessDir, "mic"+fileExt),
 			Label:  "mic",
 		})
 	}
@@ -88,24 +118,38 @@ func runRecord(args []string) error {
 			}
 			tracks = append(tracks, audiorec.Track{
 				Source: audiorec.NewMicCapture(cfg), // malgo capture works for monitor devices too
-				Path:   filepath.Join(sessDir, "system.wav"),
+				Path:   filepath.Join(sessDir, "system"+fileExt),
 				Label:  "system",
 			})
 		} else {
 			// default
-			sys := audiorec.NewSystemAudioCapture()
+			var sys audiorec.Source
+			if *includeApps != "" || *excludeApps != "" {
+				// Parse comma-separated bundle IDs and create config.
+				config := audiorec.SystemAudioConfig{}
+				if *includeApps != "" {
+					config.IncludeBundleIDs = parseCommaSeparated(*includeApps)
+				} else if *excludeApps != "" {
+					config.ExcludeBundleIDs = parseCommaSeparated(*excludeApps)
+				}
+				sys = audiorec.NewSystemAudioCaptureWithConfig(config)
+			} else {
+				sys = audiorec.NewSystemAudioCapture()
+			}
 			tracks = append(tracks, audiorec.Track{
 				Source: sys,
-				Path:   filepath.Join(sessDir, "system.wav"),
+				Path:   filepath.Join(sessDir, "system"+fileExt),
 				Label:  "system",
 			})
 		}
 	}
 
 	sess, err := audiorec.NewSession(audiorec.SessionConfig{
-		Tracks:        tracks,
-		FlushInterval: *flushInterval,
-		Logger:        logger,
+		Tracks:          tracks,
+		FlushInterval:   *flushInterval,
+		SegmentDuration: *segmentDuration,
+		Logger:          logger,
+		WriterFactory:   writerFactory,
 	})
 	if err != nil {
 		return err
@@ -140,4 +184,16 @@ then re-run. Microphone-only recording still works without it
 	}
 	logger.Info("recording stopped cleanly", "dir", sessDir)
 	return nil
+}
+
+// parseCommaSeparated splits a comma-separated string and returns the
+// non-empty trimmed parts.
+func parseCommaSeparated(s string) []string {
+	var result []string
+	for _, part := range strings.Split(s, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
