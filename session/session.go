@@ -235,8 +235,8 @@ func (s *Session) runFlushTicker(writers []*wav.Writer, stop <-chan struct{}) {
 		case <-t.C:
 			for i, w := range writers {
 				if err := w.Flush(); err != nil {
-					// Best-effort: log and move on. Writer may already be closed.
 					s.log.Debug("flush failed", "track", s.cfg.Tracks[i].Label, "err", err)
+					s.emit(Event{Kind: EventError, Track: s.cfg.Tracks[i].Label, Err: err})
 				}
 			}
 			s.emit(Event{Kind: EventFlushed})
