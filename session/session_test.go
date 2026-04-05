@@ -5,10 +5,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pmoust/audiorec/source"
+	"github.com/pmoust/audiorec/wav"
 )
 
 func TestNew_RequiresAtLeastOneTrack(t *testing.T) {
@@ -196,4 +199,76 @@ func TestRun_WavCreateFailure_RollsBackCleanly(t *testing.T) {
 	if _, err := os.Stat(badPath); !os.IsNotExist(err) {
 		t.Errorf("second.wav should not exist; stat err=%v", err)
 	}
+}
+
+// flakyWriter wraps a real wav.Writer but fails Flush() every call
+// after the first N successful calls, simulating a mid-session disk
+// error. All other methods forward to the real writer.
+type flakyWriter struct {
+	inner          Writer
+	flushesAllowed int
+	flushCallCount int
+	mu             sync.Mutex
+}
+
+func (f *flakyWriter) WriteFrame(fr source.Frame) error { return f.inner.WriteFrame(fr) }
+
+func (f *flakyWriter) Flush() error {
+	f.mu.Lock()
+	f.flushCallCount++
+	count := f.flushCallCount
+	f.mu.Unlock()
+	if count > f.flushesAllowed {
+		return errors.New("flakyWriter: simulated flush failure")
+	}
+	return f.inner.Flush()
+}
+
+func (f *flakyWriter) Close() error { return f.inner.Close() }
+
+func TestRun_FlushTickerError_EmitsEventErrorAndContinues(t *testing.T) {
+	dir := t.TempDir()
+	f := source.Format{SampleRate: 48000, Channels: 1, BitsPerSample: 16}
+
+	// Enough frames to run for multiple flush intervals.
+	src := newFakeSource(f, makeFrames(20, 20, 0xAA))
+	src.delay = 10 * time.Millisecond // ~200ms total runtime
+
+	var errorEvents int32
+	var flakyW *flakyWriter
+
+	factory := func(path string, format source.Format) (Writer, error) {
+		real, err := wav.Create(path, format)
+		if err != nil {
+			return nil, err
+		}
+		flakyW = &flakyWriter{inner: real, flushesAllowed: 1}
+		return flakyW, nil
+	}
+
+	s, err := New(Config{
+		Tracks:        []Track{{Source: src, Path: filepath.Join(dir, "out.wav"), Label: "flaky"}},
+		FlushInterval: 20 * time.Millisecond,
+		WriterFactory: factory,
+		OnEvent: func(ev Event) {
+			if ev.Kind == EventError && ev.Track == "flaky" {
+				atomic.AddInt32(&errorEvents, 1)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	// Run may return an error or nil; the key assertion is on event emission.
+	_ = s.Run(ctx)
+
+	if n := atomic.LoadInt32(&errorEvents); n < 1 {
+		t.Errorf("expected at least 1 EventError, got %d", n)
+	}
+	// Frames before the first flush failure should still have been written.
+	// We don't assert on file content directly since the flaky writer's
+	// Close() path may also error — the key assertion is event emission.
 }

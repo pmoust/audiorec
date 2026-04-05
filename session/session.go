@@ -26,6 +26,19 @@ import (
 	"github.com/pmoust/audiorec/wav"
 )
 
+// Writer is the subset of wav.Writer that Session consumes. Sessions
+// normally write to wav.Writer via the default WriterFactory, but tests
+// can inject a custom factory to exercise error paths.
+type Writer interface {
+	WriteFrame(source.Frame) error
+	Flush() error
+	Close() error
+}
+
+// WriterFactory constructs a Writer for a track. Nil Config.WriterFactory
+// defaults to a thin wrapper around wav.Create.
+type WriterFactory func(path string, format source.Format) (Writer, error)
+
 // Track couples one Source with the WAV file it writes to.
 type Track struct {
 	Source source.Source
@@ -57,6 +70,7 @@ type Config struct {
 	Tracks        []Track
 	FlushInterval time.Duration // default 2s
 	Logger        *slog.Logger  // nil => no-op
+	WriterFactory WriterFactory // nil => default (wraps wav.Create)
 	OnEvent       func(Event)   // optional
 }
 
@@ -90,6 +104,11 @@ func New(cfg Config) (*Session, error) {
 	}
 	if cfg.FlushInterval <= 0 {
 		cfg.FlushInterval = 2 * time.Second
+	}
+	if cfg.WriterFactory == nil {
+		cfg.WriterFactory = func(path string, format source.Format) (Writer, error) {
+			return wav.Create(path, format)
+		}
 	}
 	return &Session{cfg: cfg, log: logging.OrNop(cfg.Logger)}, nil
 }
@@ -125,9 +144,9 @@ func (s *Session) Run(ctx context.Context) error {
 	}
 
 	// Phase 2: Create wav writers. Sources' Format() is now stable.
-	writers := make([]*wav.Writer, len(s.cfg.Tracks))
+	writers := make([]Writer, len(s.cfg.Tracks))
 	for i, tr := range s.cfg.Tracks {
-		w, err := wav.Create(tr.Path, tr.Source.Format())
+		w, err := s.cfg.WriterFactory(tr.Path, tr.Source.Format())
 		if err != nil {
 			// Rollback: close writers created so far, all sources, remove files.
 			for j := range i {
@@ -179,7 +198,7 @@ func (s *Session) Run(ctx context.Context) error {
 // runWriter drains frames from one source into one wav writer. Exits when
 // the source's channel closes. Collects the source's Err() and any write
 // error into errCh.
-func (s *Session) runWriter(i int, w *wav.Writer, wg *sync.WaitGroup, errCh chan<- error) {
+func (s *Session) runWriter(i int, w Writer, wg *sync.WaitGroup, errCh chan<- error) {
 	defer wg.Done()
 	tr := s.cfg.Tracks[i]
 	tlog := logging.WithTrack(s.log, tr.Label)
@@ -225,7 +244,7 @@ func firstNonNil(a, b error) error {
 
 // runFlushTicker periodically calls Flush on every writer. Exits when stop
 // is closed.
-func (s *Session) runFlushTicker(writers []*wav.Writer, stop <-chan struct{}) {
+func (s *Session) runFlushTicker(writers []Writer, stop <-chan struct{}) {
 	t := time.NewTicker(s.cfg.FlushInterval)
 	defer t.Stop()
 	for {
