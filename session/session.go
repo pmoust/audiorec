@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -82,6 +83,17 @@ type Session struct {
 	log *slog.Logger
 }
 
+// trackState holds per-track counters and timestamps accumulated during Run.
+type trackState struct {
+	mu            sync.Mutex
+	startedAt     time.Time
+	endedAt       time.Time
+	framesWritten int64
+	bytesWritten  int64
+	drops         int64
+	err           error
+}
+
 // New validates cfg and returns a Session ready to Run. It does NOT start
 // any sources — Run does that.
 func New(cfg Config) (*Session, error) {
@@ -131,6 +143,7 @@ func (s *Session) Run(ctx context.Context) error {
 	defer cancel()
 
 	// Phase 1: Start every source. Track which ones started for rollback.
+	// Also prepare trackStates (will be fully allocated in Phase 3).
 	started := make([]bool, len(s.cfg.Tracks))
 	for i, tr := range s.cfg.Tracks {
 		if err := tr.Source.Start(ctx); err != nil {
@@ -175,14 +188,23 @@ func (s *Session) Run(ctx context.Context) error {
 
 	s.emit(Event{Kind: EventStarted})
 
-	// Phase 3: Writer goroutines + supervisor.
+	// Phase 3: Writer goroutines + supervisor. Per-track flush and segment
+	// tickers live inside each runWriter, so there is no shared ticker
+	// goroutine. Per-track state (counters, timestamps) is accumulated
+	// into trackStates for the session-level manifest.
+	sessionStartedAt := time.Now()
+	trackStates := make([]*trackState, len(s.cfg.Tracks))
+	for i := range s.cfg.Tracks {
+		trackStates[i] = &trackState{}
+	}
+
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(s.cfg.Tracks))
 	stopCh := make(chan struct{})
 
 	for i := range s.cfg.Tracks {
 		wg.Add(1)
-		go s.runWriter(i, writers[i], &wg, errCh, stopCh)
+		go s.runWriter(i, writers[i], trackStates[i], &wg, errCh, stopCh)
 	}
 
 	// Wait for all writers to exit.
@@ -202,16 +224,82 @@ func (s *Session) Run(ctx context.Context) error {
 			errs = append(errs, e)
 		}
 	}
-	return errors.Join(errs...)
+	runErr := errors.Join(errs...)
+
+	// Build and write manifest.
+	sessionEndedAt := time.Now()
+	trackManifests := make([]TrackManifest, len(s.cfg.Tracks))
+	for i, tr := range s.cfg.Tracks {
+		ts := trackStates[i]
+		ts.mu.Lock()
+		startedAt := ts.startedAt
+		endedAt := ts.endedAt
+		framesWritten := ts.framesWritten
+		bytesWritten := ts.bytesWritten
+		drops := ts.drops
+		trackErr := ts.err
+		ts.mu.Unlock()
+
+		errStr := (*string)(nil)
+		if trackErr != nil {
+			es := trackErr.Error()
+			errStr = &es
+		}
+
+		trackManifests[i] = TrackManifest{
+			Label:         tr.Label,
+			Path:          filepath.Base(tr.Path), // basename only
+			Format:        tr.Source.Format(),
+			StartedAt:     startedAt,
+			EndedAt:       endedAt,
+			FramesWritten: framesWritten,
+			BytesWritten:  bytesWritten,
+			Drops:         drops,
+			Error:         errStr,
+		}
+	}
+
+	sessionID := filepath.Base(sessionDir(s.cfg.Tracks))
+	if sessionID == "" {
+		sessionID = sessionStartedAt.Format("20060102-150405")
+	}
+
+	manifest := &Manifest{
+		Version:   ManifestVersion,
+		SessionID: sessionID,
+		StartedAt: sessionStartedAt,
+		EndedAt:   sessionEndedAt,
+		Tracks:    trackManifests,
+	}
+	manifest.DurationSeconds = manifest.EndedAt.Sub(manifest.StartedAt).Seconds()
+
+	dir := sessionDir(s.cfg.Tracks)
+	if dir != "" {
+		path := filepath.Join(dir, "manifest.json")
+		if err := WriteManifestJSON(path, manifest); err != nil {
+			s.log.Warn("manifest write failed", "err", err)
+		}
+	}
+
+	return runErr
 }
 
-// runWriter drains frames from one source into one wav writer. It handles
-// periodic flushing and optional segment rotation. Exits when the source's
-// channel closes. Collects the source's Err() and any write error into errCh.
-func (s *Session) runWriter(i int, w Writer, wg *sync.WaitGroup, errCh chan<- error, stop <-chan struct{}) {
+// runWriter drains frames from one source into one wav writer. It owns
+// a per-track flush ticker and, when Config.SegmentDuration > 0, a per-
+// track segment rotation ticker. Accumulates per-track counters and
+// timestamps into ts for the session-level manifest. Exits when the
+// source's channel closes, a write error occurs, a segment rotation
+// fails, or stop is signaled. Collects the termination reason into
+// errCh exactly once before returning.
+func (s *Session) runWriter(i int, w Writer, ts *trackState, wg *sync.WaitGroup, errCh chan<- error, stop <-chan struct{}) {
 	defer wg.Done()
 	tr := s.cfg.Tracks[i]
 	tlog := logging.WithTrack(s.log, tr.Label)
+
+	// Capture per-track start time for the manifest.
+	ts.mu.Lock()
+	ts.startedAt = time.Now()
+	ts.mu.Unlock()
 
 	// Per-writer flush ticker and optional segment ticker.
 	flushT := time.NewTicker(s.cfg.FlushInterval)
@@ -249,18 +337,9 @@ func (s *Session) runWriter(i int, w Writer, wg *sync.WaitGroup, errCh chan<- er
 					writeErr = closeErr
 				}
 				srcErr := tr.Source.Err()
+				s.finalizeTrackState(ts, tr.Source, srcErr, writeErr)
 				s.emit(Event{Kind: EventTrackEnded, Track: tr.Label, Err: firstNonNil(srcErr, writeErr)})
-
-				switch {
-				case srcErr != nil && writeErr != nil:
-					errCh <- fmt.Errorf("track %q: %w (write: %w)", tr.Label, srcErr, writeErr)
-				case srcErr != nil:
-					errCh <- fmt.Errorf("track %q: %w", tr.Label, srcErr)
-				case writeErr != nil:
-					errCh <- fmt.Errorf("track %q: %w", tr.Label, writeErr)
-				default:
-					errCh <- nil
-				}
+				errCh <- joinTrackError(tr.Label, srcErr, writeErr)
 				return
 			}
 
@@ -274,20 +353,17 @@ func (s *Session) runWriter(i int, w Writer, wg *sync.WaitGroup, errCh chan<- er
 				// Close and finalize with error.
 				_ = w.Close()
 				srcErr := tr.Source.Err()
+				s.finalizeTrackState(ts, tr.Source, srcErr, writeErr)
 				s.emit(Event{Kind: EventTrackEnded, Track: tr.Label, Err: firstNonNil(srcErr, writeErr)})
-
-				switch {
-				case srcErr != nil && writeErr != nil:
-					errCh <- fmt.Errorf("track %q: %w (write: %w)", tr.Label, srcErr, writeErr)
-				case srcErr != nil:
-					errCh <- fmt.Errorf("track %q: %w", tr.Label, srcErr)
-				case writeErr != nil:
-					errCh <- fmt.Errorf("track %q: %w", tr.Label, writeErr)
-				default:
-					errCh <- nil
-				}
+				errCh <- joinTrackError(tr.Label, srcErr, writeErr)
 				return
 			}
+
+			// Frame written successfully — accumulate counters for the manifest.
+			ts.mu.Lock()
+			ts.framesWritten += int64(f.NumFrames)
+			ts.bytesWritten += int64(len(f.Data))
+			ts.mu.Unlock()
 
 		case <-flushT.C:
 			if err := w.Flush(); err != nil {
@@ -315,13 +391,52 @@ func (s *Session) runWriter(i int, w Writer, wg *sync.WaitGroup, errCh chan<- er
 				// track while Run reports success.
 				for range framesCh {
 				}
-				errCh <- fmt.Errorf("track %q: segment rotation: %w", tr.Label, err)
+				srcErr := tr.Source.Err()
+				rotErr := fmt.Errorf("segment rotation: %w", err)
+				s.finalizeTrackState(ts, tr.Source, srcErr, rotErr)
+				s.emit(Event{Kind: EventTrackEnded, Track: tr.Label, Err: firstNonNil(srcErr, rotErr)})
+				errCh <- fmt.Errorf("track %q: %w", tr.Label, rotErr)
 				return
 			}
 
 			w = newW
 			s.emit(Event{Kind: EventSegmentRotated, Track: tr.Label})
 		}
+	}
+}
+
+// finalizeTrackState stamps endedAt, drops, and a combined error string
+// onto ts. Called from every runWriter exit path exactly once so the
+// session-level manifest sees a consistent final snapshot.
+func (s *Session) finalizeTrackState(ts *trackState, src source.Source, srcErr, writeErr error) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.endedAt = time.Now()
+	if d, ok := src.(interface{ Drops() int64 }); ok {
+		ts.drops = d.Drops()
+	}
+	switch {
+	case srcErr != nil && writeErr != nil:
+		ts.err = fmt.Errorf("%w (write: %w)", srcErr, writeErr)
+	case srcErr != nil:
+		ts.err = srcErr
+	case writeErr != nil:
+		ts.err = writeErr
+	}
+}
+
+// joinTrackError builds the canonical per-track error returned from a
+// runWriter exit path, or nil when both are nil.
+func joinTrackError(label string, srcErr, writeErr error) error {
+	switch {
+	case srcErr != nil && writeErr != nil:
+		return fmt.Errorf("track %q: %w (write: %w)", label, srcErr, writeErr)
+	case srcErr != nil:
+		return fmt.Errorf("track %q: %w", label, srcErr)
+	case writeErr != nil:
+		return fmt.Errorf("track %q: %w", label, writeErr)
+	default:
+		return nil
 	}
 }
 
