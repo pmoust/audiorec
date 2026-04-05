@@ -30,7 +30,7 @@ import (
 type Track struct {
 	Source source.Source
 	Path   string
-	Label  string // used in logs and Stats; must be unique within a Session
+	Label  string // used in logs; must be unique within a Session
 }
 
 // EventKind categorizes OnEvent callbacks.
@@ -92,18 +92,6 @@ func New(cfg Config) (*Session, error) {
 		cfg.FlushInterval = 2 * time.Second
 	}
 	return &Session{cfg: cfg, log: logging.OrNop(cfg.Logger)}, nil
-}
-
-// Stats is a snapshot of per-track counters.
-type Stats struct {
-	Tracks map[string]TrackStats
-}
-
-type TrackStats struct {
-	FramesWritten int64
-	BytesWritten  int64
-	Drops         int64
-	LastFlushAt   time.Time
 }
 
 // Run starts every Source in cfg.Tracks, creates a wav.Writer per track,

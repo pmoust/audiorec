@@ -48,7 +48,6 @@ type (
 	SessionConfig = session.Config
 	Track         = session.Track
 	Event         = session.Event
-	Stats         = session.Stats
 )
 
 func NewSession(cfg SessionConfig) (*Session, error) { return session.New(cfg) }
