@@ -91,9 +91,10 @@ jobs:
           cache: false # golangci-lint-action manages its own cache
 
       # golangci-lint version pinned to match local dev (brew).
-      # Bump in lockstep when upgrading locally.
+      # Bump in lockstep when upgrading locally. Action v7 is required
+      # for golangci-lint v2.x.
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.4
 
