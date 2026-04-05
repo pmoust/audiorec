@@ -2,7 +2,18 @@
 
 This list was produced by the final architectural review of the Wave 0–E implementation before merging `dev/audiorec-v1` into `main`. The review verdict was **MERGE WITH CAVEATS**: architecture sound, no blockers, but three items should land before tagging v1, plus six minor cleanups for later.
 
-## Before tagging v1
+## Status: fix wave landed 2026-04-05
+
+- ✅ **S1** — fixed in `f4a5afd` (Linux monitor DeviceID plumbed via `malgo.DefaultSystemAudioCaptureConfig`)
+- ✅ **S2** — fixed in `b77802b` (CLI device-name resolution via `malgo.FindCaptureConfig`; macOS `--system` rejects named devices with a clear error)
+- ✅ **S3** — fixed in `7d4d66f` (dead `Stats`/`TrackStats` types deleted)
+- ✅ **P1** — fixed in `339cc48` (replaced hand-rolled `contains`/`indexOf` with `strings.Contains`)
+- ✅ **P2** — fixed in `c3cdd7d` (dead `unsafe.Pointer(nil)` line and unused import removed)
+- ⬜ **P3, P4, P5, P6, P7** — deferred to v1.1 (details below)
+
+The project is now ready for a v1 tag. The remaining items below are v1.1 material.
+
+## Before tagging v1 (✅ all resolved)
 
 ### S1 — Linux system-audio default captures the mic, not the monitor
 
