@@ -74,14 +74,25 @@ func TestMapError(t *testing.T) {
 	}
 }
 
-// TestCapture_NullBackend_EndToEnd tests Capture with explicit Backends
-// restriction. On platforms where the null backend is available (e.g., Linux),
-// this provides hardware-free deterministic capture suitable for CI. On
-// platforms where it's unavailable (e.g., macOS), the test skips.
+// backendNullFixed works around a malgo v0.11.24 enum bug: the Go
+// Backend enum at enumerations.go skips ma_backend_custom (C value 13),
+// so malgo.BackendNull resolves to 13 (which is actually ma_backend_custom
+// in C) rather than 14 (ma_backend_null). Passing malgo.BackendNull to
+// ma.InitContext therefore fails with "No backend" because the C side
+// interprets it as a request for the custom backend with no callbacks.
+// This constant forces the real null backend regardless of that mismatch
+// and should be removed once malgo fixes its enum upstream.
+const backendNullFixed ma.Backend = 14
+
+// TestCapture_NullBackend_EndToEnd exercises the full Capture lifecycle
+// (Start → frame delivery → ctx cancel → stopDevice → Err) against
+// miniaudio's null backend. The null backend has no hardware or OS-audio
+// requirements, making this test deterministic on every runner including
+// headless CI.
 func TestCapture_NullBackend_EndToEnd(t *testing.T) {
 	cfg := CaptureConfig{
 		Channels: 1,
-		Backends: []ma.Backend{ma.BackendNull},
+		Backends: []ma.Backend{backendNullFixed},
 	}
 	cap := NewCapture(cfg)
 
@@ -89,7 +100,7 @@ func TestCapture_NullBackend_EndToEnd(t *testing.T) {
 	defer cancel()
 
 	if err := cap.Start(ctx); err != nil {
-		t.Skipf("null backend unavailable on this platform: %v", err)
+		t.Fatalf("Start with null backend: %v", err)
 	}
 
 	// Drain frames until the channel closes (ctx timeout will cancel).
