@@ -15,6 +15,7 @@ package audiorec
 
 import (
 	"github.com/pmoust/audiorec/backend/malgo"
+	"github.com/pmoust/audiorec/backend/sck"
 	"github.com/pmoust/audiorec/session"
 	"github.com/pmoust/audiorec/source"
 )
@@ -71,7 +72,22 @@ func NewSystemAudioCapture() Source {
 	return newSystemAudioDefault()
 }
 
+// SystemAudioConfig is a type alias for platform-specific system audio
+// configuration, primarily for per-app filtering on macOS 13+.
+type SystemAudioConfig = sck.SystemAudioConfig
+
+// NewSystemAudioCaptureWithConfig returns a Source configured with
+// platform-specific per-app filtering. On macOS, it uses ScreenCaptureKit
+// with the given filter. On Linux, IncludeBundleIDs and ExcludeBundleIDs
+// are ignored; the function returns a default system audio source (monitor
+// of the default sink). Callers on Linux that pass a non-empty config will
+// have those filters silently ignored.
+func NewSystemAudioCaptureWithConfig(cfg SystemAudioConfig) Source {
+	return newSystemAudioWithConfig(cfg)
+}
+
 // EnumerateMalgoDevices is a convenience re-export.
 func EnumerateMalgoDevices() ([]DeviceInfo, error) { return malgo.Enumerate() }
 
-// newSystemAudioDefault is provided by platform-specific files below.
+// newSystemAudioDefault and newSystemAudioWithConfig are provided by
+// platform-specific files below.
