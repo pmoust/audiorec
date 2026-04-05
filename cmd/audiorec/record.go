@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/pmoust/audiorec"
+	"github.com/pmoust/audiorec/flac"
+	"github.com/pmoust/audiorec/session"
 )
 
 func runRecord(args []string) error {
@@ -25,6 +27,7 @@ func runRecord(args []string) error {
 		systemFlag    = fs.String("system", "default", `system audio: "default", "none", or a device name`)
 		duration      = fs.Duration("d", 0, "optional hard-stop duration (e.g. 30m); 0 = record until SIGINT")
 		flushInterval = fs.Duration("flush-interval", 2*time.Second, "WAV header flush interval")
+		format        = fs.String("format", "wav", `output format: "wav" or "flac" (note: FLAC does not support float PCM, e.g. macOS system audio)`)
 		verbose       = fs.Bool("v", false, "verbose (debug) logging")
 	)
 	fs.Usage = func() {
@@ -40,6 +43,9 @@ func runRecord(args []string) error {
 	}
 	if *micFlag == "none" && *systemFlag == "none" {
 		return errors.New("at least one of --mic or --system must be enabled")
+	}
+	if *format != "wav" && *format != "flac" {
+		return fmt.Errorf("--format must be \"wav\" or \"flac\", got %q", *format)
 	}
 
 	level := slog.LevelInfo
@@ -57,6 +63,20 @@ func runRecord(args []string) error {
 		return fmt.Errorf("mkdir %s: %w", sessDir, err)
 	}
 
+	// Determine file extension based on format.
+	var fileExt string
+	var writerFactory session.WriterFactory
+	switch *format {
+	case "wav":
+		fileExt = ".wav"
+		writerFactory = nil // nil => default (uses wav.Create)
+	case "flac":
+		fileExt = ".flac"
+		writerFactory = func(path string, f audiorec.Format) (session.Writer, error) {
+			return flac.Create(path, f)
+		}
+	}
+
 	var tracks []audiorec.Track
 	if *micFlag != "none" {
 		var cfg audiorec.CaptureConfig
@@ -72,7 +92,7 @@ func runRecord(args []string) error {
 		mic := audiorec.NewMicCapture(cfg)
 		tracks = append(tracks, audiorec.Track{
 			Source: mic,
-			Path:   filepath.Join(sessDir, "mic.wav"),
+			Path:   filepath.Join(sessDir, "mic"+fileExt),
 			Label:  "mic",
 		})
 	}
@@ -88,7 +108,7 @@ func runRecord(args []string) error {
 			}
 			tracks = append(tracks, audiorec.Track{
 				Source: audiorec.NewMicCapture(cfg), // malgo capture works for monitor devices too
-				Path:   filepath.Join(sessDir, "system.wav"),
+				Path:   filepath.Join(sessDir, "system"+fileExt),
 				Label:  "system",
 			})
 		} else {
@@ -96,7 +116,7 @@ func runRecord(args []string) error {
 			sys := audiorec.NewSystemAudioCapture()
 			tracks = append(tracks, audiorec.Track{
 				Source: sys,
-				Path:   filepath.Join(sessDir, "system.wav"),
+				Path:   filepath.Join(sessDir, "system"+fileExt),
 				Label:  "system",
 			})
 		}
@@ -106,6 +126,7 @@ func runRecord(args []string) error {
 		Tracks:        tracks,
 		FlushInterval: *flushInterval,
 		Logger:        logger,
+		WriterFactory: writerFactory,
 	})
 	if err != nil {
 		return err
