@@ -6,12 +6,18 @@ package sck
 #cgo CFLAGS: -x objective-c -fobjc-arc
 #cgo LDFLAGS: -framework Foundation -framework ScreenCaptureKit -framework CoreMedia
 
+#include <stdint.h>
 #include "sck_bridge.h"
 
 extern void audiorecSCKAudioCallback(float* data, int numFrames, int channels, int sampleRate, void* user);
 
-static inline sck_capture_t* audiorec_sck_create(void* user) {
-    return sck_capture_create((sck_audio_cb)audiorecSCKAudioCallback, user);
+// audiorec_sck_create_id takes the Go-side registry id as a uintptr_t and
+// forwards it to sck_capture_create as a void*. Doing the integer→void*
+// cast on the C side avoids a Go-side unsafe.Pointer(uintptr) conversion
+// that go vet flags under unsafe.Pointer rule 6 — even though the integer
+// is never a real Go pointer, bare go vet cannot be silenced with comments.
+static inline sck_capture_t* audiorec_sck_create_id(uintptr_t id) {
+    return sck_capture_create((sck_audio_cb)audiorecSCKAudioCallback, (void*)id);
 }
 */
 import "C"
@@ -141,7 +147,7 @@ func (c *Capture) Start(ctx context.Context) error {
 	c.closeCh = make(chan struct{})
 
 	id := register(c)
-	c.handle = C.audiorec_sck_create(unsafe.Pointer(id))
+	c.handle = C.audiorec_sck_create_id(C.uintptr_t(id))
 	if c.handle == nil {
 		unregister(id)
 		return fmt.Errorf("sck: create failed")
