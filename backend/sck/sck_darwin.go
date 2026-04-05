@@ -32,12 +32,27 @@ import (
 	"github.com/pmoust/audiorec/source"
 )
 
+// SystemAudioConfig configures per-app audio capture on macOS 13+.
+// Leave both slices empty for the default "capture everything" behavior.
+// IncludeBundleIDs and ExcludeBundleIDs are mutually exclusive.
+//
+// Note: pre-macOS 14.4, ScreenCaptureKit's SCContentFilter applied
+// application filtering to visual content but did not fully isolate
+// audio. On macOS 14.4 and later, audio capture respects the filter.
+// On older versions, audiorec still constructs the filter but the
+// captured audio may include system-wide sound from unrelated apps.
+type SystemAudioConfig struct {
+	IncludeBundleIDs []string
+	ExcludeBundleIDs []string
+}
+
 // Capture is the darwin ScreenCaptureKit-backed system-audio Source.
 type Capture struct {
 	mu      sync.Mutex
 	handle  *C.sck_capture_t
 	frames  chan source.Frame
 	format  source.Format
+	config  SystemAudioConfig
 	err     error
 	started bool
 	closed  bool
@@ -48,7 +63,14 @@ type Capture struct {
 // first Start call will trigger the Screen Recording permission prompt
 // if the user has not granted it; a denial surfaces as ErrPermissionDenied.
 func NewSystemAudio() *Capture {
-	return &Capture{}
+	return NewSystemAudioWithConfig(SystemAudioConfig{})
+}
+
+// NewSystemAudioWithConfig returns a Source configured with the given
+// filter. Empty IncludeBundleIDs and ExcludeBundleIDs means "capture
+// all system audio" (same as NewSystemAudio()).
+func NewSystemAudioWithConfig(cfg SystemAudioConfig) *Capture {
+	return &Capture{config: cfg}
 }
 
 // Registry maps C user pointers (uintptr values) back to Go Capture
