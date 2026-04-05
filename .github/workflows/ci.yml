@@ -126,7 +126,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.os }}-${{ matrix.go }}
           path: coverage.out
@@ -205,7 +205,7 @@ jobs:
         run: mv audiorec audiorec-${{ matrix.os }}
 
       - name: Upload CLI binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: audiorec-${{ matrix.os }}
           path: audiorec-${{ matrix.os }}
@@ -241,7 +241,7 @@ jobs:
         run: ./dist/audiorec.app/Contents/MacOS/audiorec devices
 
       - name: Upload .app bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: audiorec.app
           path: dist/audiorec.app
