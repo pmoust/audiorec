@@ -21,9 +21,12 @@ The project is now ready for a v1 tag. The remaining items below are v1.1 materi
 - ✅ **P6** — fixed in `404c9a4` (sck import moved to platform files via blank import in audiorec_linux.go)
 - ✅ **P7** — fixed in `3796999` (flush ticker emits EventError on flush failures)
 - ✅ **Test gap A** — fixed in `24463a1` (TestRun_WavCreateFailure_RollsBackCleanly covers Phase-2 rollback)
-- ⬜ **Test gap B** — runFlushTicker error-path test deferred (hard to simulate without a writer injection seam)
-- ⬜ **Test gap C** — end-to-end malgo capture test deferred (requires real hardware in CI)
-- ⬜ **Test gap D** — sck Obj-C bridge automation deferred (requires signed bundle + TCC-primed runner)
+
+## Status: v1.2 test coverage wave landed 2026-04-06
+
+- ✅ **Test gap B** — fixed in `517e792` (WriterFactory injection seam + TestRun_FlushTickerError_EmitsEventErrorAndContinues)
+- ✅ **Test gap C** — fixed in `5318719` (TestCapture_NullBackend_EndToEnd via CaptureConfig.Backends and ma.BackendNull; skips on platforms where null backend unavailable)
+- ✅ **Test gap D** — fixed in `9fbf98b` (TestMapSCKError + TestSCKRegistry; pure-Go coverage of sck bridge; full Obj-C automation still deferred as it requires TCC-primed signed bundles)
 
 ## Before tagging v1 (✅ all resolved)
 
