@@ -5,12 +5,12 @@ import "context"
 // Source is the single contract every audio capture backend implements.
 //
 // Lifecycle:
-//   1. Caller constructs a Source (backend-specific constructor).
-//   2. Caller calls Start(ctx). On success, Format() is stable and Frames()
-//      begins emitting frames.
-//   3. Caller ranges over Frames() until it closes.
-//   4. After Frames() closes, caller inspects Err() for the termination reason.
-//   5. Caller calls Close() to release device resources (idempotent).
+//  1. Caller constructs a Source (backend-specific constructor).
+//  2. Caller calls Start(ctx). On success, Format() is stable and Frames()
+//     begins emitting frames.
+//  3. Caller ranges over Frames() until it closes.
+//  4. After Frames() closes, caller inspects Err() for the termination reason.
+//  5. Caller calls Close() to release device resources (idempotent).
 //
 // Cancellation: cancelling the ctx passed to Start is the normal stop path.
 // The backend drains its buffers, closes Frames(), and Err() returns nil.
