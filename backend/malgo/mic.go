@@ -16,6 +16,11 @@ import (
 type CaptureConfig struct {
 	DeviceID *ma.DeviceID // nil => OS default
 	Channels int          // 0 => use device native (1 for mic, 2 for monitor typically)
+	// Backends, if non-nil, restricts the malgo context to the given
+	// backends. Primarily useful for tests (e.g. []ma.Backend{ma.BackendNull}
+	// for hardware-free capture). Production callers should leave this nil
+	// to get the platform default.
+	Backends []ma.Backend
 	// SampleRate is informational only in v1 — we always request the device
 	// native rate by passing 0 to miniaudio.
 }
@@ -57,7 +62,7 @@ func (c *Capture) Start(ctx context.Context) error {
 	}
 	c.mu.Unlock()
 
-	maCtx, err := ma.InitContext(nil, ma.ContextConfig{}, func(string) {})
+	maCtx, err := ma.InitContext(c.cfg.Backends, ma.ContextConfig{}, func(string) {})
 	if err != nil {
 		return fmt.Errorf("malgo: init context: %w", err)
 	}

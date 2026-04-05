@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	ma "github.com/gen2brain/malgo"
 	"github.com/pmoust/audiorec/source"
 )
 
@@ -70,5 +71,47 @@ func TestMapError(t *testing.T) {
 				t.Errorf("mapError(%v) = %v; want errors.Is %v", c.input, got, c.want)
 			}
 		})
+	}
+}
+
+// TestCapture_NullBackend_EndToEnd tests Capture with explicit Backends
+// restriction. On platforms where the null backend is available (e.g., Linux),
+// this provides hardware-free deterministic capture suitable for CI. On
+// platforms where it's unavailable (e.g., macOS), the test skips.
+func TestCapture_NullBackend_EndToEnd(t *testing.T) {
+	cfg := CaptureConfig{
+		Channels: 1,
+		Backends: []ma.Backend{ma.BackendNull},
+	}
+	cap := NewCapture(cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	if err := cap.Start(ctx); err != nil {
+		t.Skipf("null backend unavailable on this platform: %v", err)
+	}
+
+	// Drain frames until the channel closes (ctx timeout will cancel).
+	var frames int
+	var totalBytes int
+	for f := range cap.Frames() {
+		frames++
+		totalBytes += len(f.Data)
+	}
+	if err := cap.Err(); err != nil {
+		t.Errorf("Err after clean shutdown: %v", err)
+	}
+	if frames == 0 {
+		t.Errorf("expected at least one frame from null backend; got 0")
+	}
+	if totalBytes == 0 {
+		t.Errorf("expected non-zero bytes; got 0")
+	}
+	t.Logf("received %d frames, %d bytes, format=%+v", frames, totalBytes, cap.Format())
+
+	// Ensure Close is safe after ctx cancellation teardown.
+	if err := cap.Close(); err != nil {
+		t.Errorf("Close: %v", err)
 	}
 }
