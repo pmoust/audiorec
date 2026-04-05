@@ -8,17 +8,15 @@ import (
 	"github.com/pmoust/audiorec/backend/malgo"
 )
 
-// newSystemAudioDefault returns a Source for the Linux default monitor
-// source. It verifies a monitor device exists via enumeration; if none
-// does, it returns a Source whose Start fails with ErrDeviceNotFound.
-// Otherwise it returns a malgo.Capture with nil DeviceID, relying on
-// miniaudio to pick the default capture — on PipeWire/PulseAudio systems
-// this is typically the default monitor when no mic is active.
+// newSystemAudioDefault returns a Source capturing the Linux default sink's
+// monitor source (via PipeWire/PulseAudio). Returns a failingSource whose
+// Start errors with ErrDeviceNotFound if no monitor exists.
 func newSystemAudioDefault() Source {
-	if _, err := malgo.DefaultSystemAudioDevice(); err != nil {
+	cfg, err := malgo.DefaultSystemAudioCaptureConfig(2)
+	if err != nil {
 		return &failingSource{err: err}
 	}
-	return malgo.NewCapture(malgo.CaptureConfig{Channels: 2})
+	return malgo.NewCapture(cfg)
 }
 
 type failingSource struct {

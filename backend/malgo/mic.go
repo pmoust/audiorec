@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	ma "github.com/gen2brain/malgo"
 	"github.com/pmoust/audiorec/source"
@@ -133,7 +133,6 @@ func (c *Capture) Start(ctx context.Context) error {
 		c.stopDevice()
 	}()
 
-	_ = unsafe.Pointer(nil) // silence unused-import on some toolchains
 	return nil
 }
 
@@ -204,30 +203,13 @@ func mapError(err error) error {
 	// cases.
 	msg := err.Error()
 	switch {
-	case contains(msg, "permission") || contains(msg, "not authorized"):
+	case strings.Contains(msg, "permission") || strings.Contains(msg, "not authorized"):
 		return fmt.Errorf("%w: %v", source.ErrPermissionDenied, err)
-	case contains(msg, "device not found") || contains(msg, "no such device"):
+	case strings.Contains(msg, "device not found") || strings.Contains(msg, "no such device"):
 		return fmt.Errorf("%w: %v", source.ErrDeviceNotFound, err)
-	case contains(msg, "disconnected"):
+	case strings.Contains(msg, "disconnected"):
 		return fmt.Errorf("%w: %v", source.ErrDeviceDisconnected, err)
 	default:
 		return err
 	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && indexOf(s, sub) >= 0
-}
-
-func indexOf(s, sub string) int {
-outer:
-	for i := 0; i+len(sub) <= len(s); i++ {
-		for j := 0; j < len(sub); j++ {
-			if s[i+j] != sub[j] {
-				continue outer
-			}
-		}
-		return i
-	}
-	return -1
 }
