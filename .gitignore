@@ -1,0 +1,20 @@
+# Binaries
+/audiorec
+/cmd/audiorec/audiorec
+*.exe
+
+# Test output
+*.out
+*.test
+coverage.out
+
+# macOS .app build output
+/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS junk
+.DS_Store
