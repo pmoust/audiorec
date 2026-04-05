@@ -106,10 +106,11 @@ jobs:
           name="audiorec-${tag}-${{ matrix.target }}"
           mkdir -p dist
           # Assemble archive contents: the binary plus README; include
-          # LICENSE if one exists at the repo root.
-          files="audiorec README.md"
-          if [ -f LICENSE ]; then files="$files LICENSE"; fi
-          tar -czf "dist/${name}.tar.gz" $files
+          # LICENSE if one exists at the repo root. Use an array to
+          # avoid the word-splitting tripwire on "$files".
+          files=(audiorec README.md)
+          if [ -f LICENSE ]; then files+=(LICENSE); fi
+          tar -czf "dist/${name}.tar.gz" "${files[@]}"
           shasum -a 256 "dist/${name}.tar.gz" > "dist/${name}.tar.gz.sha256"
           ls -la dist/
 

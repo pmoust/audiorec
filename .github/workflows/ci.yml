@@ -90,9 +90,9 @@ jobs:
           go-version-file: go.mod
           cache: false # golangci-lint-action manages its own cache
 
+      # golangci-lint version pinned to match local dev (brew).
+      # Bump in lockstep when upgrading locally.
       - name: golangci-lint
-      # Pinned to the version developers use locally (brew/golangci-lint 2.x).
-      # Bump in lockstep with local upgrades.
         uses: golangci/golangci-lint-action@v6
         with:
           version: v2.11.4
@@ -180,7 +180,8 @@ jobs:
       - name: Smoke — record help prints usage
         # `record -h` exits 1 (flag.ErrHelp) but must print the flag list on
         # stderr. Grep makes this exit-code-independent.
-        run: ./audiorec record -h 2>&1 | grep -q "Usage: audiorec record"
+        run: |
+          ./audiorec record -h 2>&1 | grep -q "Usage: audiorec record"
 
       - name: Smoke — named mic on unknown device errors cleanly
         run: |
