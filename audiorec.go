@@ -40,6 +40,7 @@ var (
 	ErrDeviceDisconnected = source.ErrDeviceDisconnected
 	ErrUnsupportedFormat  = source.ErrUnsupportedFormat
 	ErrUnsupportedOS      = source.ErrUnsupportedOS
+	ErrBackendFailure     = source.ErrBackendFailure
 )
 
 // Re-exports from session.

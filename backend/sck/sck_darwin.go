@@ -225,12 +225,12 @@ func mapSCKError(code int) error {
 	case 1:
 		return fmt.Errorf("%w: macOS Screen Recording not granted", source.ErrPermissionDenied)
 	case 2:
-		return fmt.Errorf("sck: no shareable content (no displays)")
+		return fmt.Errorf("%w: no shareable content (no displays)", source.ErrDeviceNotFound)
 	case 3:
-		return fmt.Errorf("sck: SCStream init failed")
+		return fmt.Errorf("%w: SCStream init failed", source.ErrBackendFailure)
 	case 4:
-		return fmt.Errorf("sck: SCStream start failed")
+		return fmt.Errorf("%w: SCStream start failed", source.ErrBackendFailure)
 	default:
-		return fmt.Errorf("sck: error code %d", code)
+		return fmt.Errorf("%w: sck error code %d", source.ErrBackendFailure, code)
 	}
 }
