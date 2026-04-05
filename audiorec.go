@@ -48,6 +48,8 @@ type (
 	SessionConfig = session.Config
 	Track         = session.Track
 	Event         = session.Event
+	Writer        = session.Writer
+	WriterFactory = session.WriterFactory
 )
 
 func NewSession(cfg SessionConfig) (*Session, error) { return session.New(cfg) }
