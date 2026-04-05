@@ -53,7 +53,7 @@ Single Go module. Packages:
 github.com/pmoust/audiorec/
 ├── audiorec.go                       Public API re-exports: Recorder, Source, Session, Config
 ├── source/                           Source interface + shared types
-│   ├── source.go                     interface Source { Start/Stop/Frames/Format/Err/Close }
+│   ├── source.go                     interface Source { Start/Frames/Format/Err/Close }
 │   └── format.go                     Format, Frame, DeviceInfo, Kind
 ├── backend/
 │   ├── malgo/                        miniaudio-backed Source (mic everywhere, Linux system)
@@ -304,6 +304,7 @@ Backends wrap with `fmt.Errorf("%w: <native detail>", ErrX)` so callers use `err
 - **AirPods / Bluetooth mid-session switching.** Sources capture a specific device handle at Start, not "default". If that device disconnects, the source ends with `ErrDeviceDisconnected`. We do not silently switch.
 - **Linux monitor naming.** PipeWire (with pulse compat) and PulseAudio both expose monitors as `<sink-name>.monitor`. CLI auto-resolution: get default sink name, look up `<sink>.monitor`. On failure, return `ErrDeviceNotFound` and tell the user to pass `--system` explicitly.
 - **cgo mandatory.** Both `malgo` and `backend/sck` require cgo. Pure-Go builds are not supported; build fails with a clear message via a stub.
+- **macOS TCC and unbundled binaries.** macOS ties TCC permission grants to a code signature + bundle identifier. A plain `go build` binary is not a signed app bundle, so each rebuild can look like a new application to TCC, causing the permission prompt to re-appear or the grant to fail silently. For reliable permission persistence on macOS, `audiorec` must be distributed as a signed `.app` bundle (with `Info.plist` declaring `NSMicrophoneUsageDescription`, and Screen Recording access requested at runtime). For development, the pragmatic workaround is a Makefile target that wraps the Go binary into a minimal `.app` with a stable bundle ID and ad-hoc signature. The library itself is unaffected; this is a CLI/distribution concern, documented in README, and the Makefile will be defined during implementation planning.
 
 ### Logging
 
