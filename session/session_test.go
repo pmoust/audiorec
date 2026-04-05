@@ -160,3 +160,40 @@ func TestRun_StartupFailure_RollsBackCleanly(t *testing.T) {
 		t.Errorf("bad.wav should not exist after rollback; err=%v", err)
 	}
 }
+
+func TestRun_WavCreateFailure_RollsBackCleanly(t *testing.T) {
+	dir := t.TempDir()
+	f := source.Format{SampleRate: 48000, Channels: 1, BitsPerSample: 16}
+
+	good := newFakeSource(f, makeFrames(5, 20, 0xAA))
+	other := newFakeSource(f, makeFrames(5, 20, 0xBB))
+
+	// Second track points at a directory that does not and cannot exist,
+	// causing wav.Create to fail in Phase 2 (after both sources have
+	// been successfully Start()ed in Phase 1).
+	badPath := filepath.Join(dir, "definitely-missing-subdir", "second.wav")
+	goodPath := filepath.Join(dir, "first.wav")
+
+	s, err := New(Config{
+		Tracks: []Track{
+			{Source: good, Path: goodPath, Label: "first"},
+			{Source: other, Path: badPath, Label: "second"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	runErr := s.Run(context.Background())
+	if runErr == nil {
+		t.Fatalf("expected Run to fail due to wav.Create on track 'second'")
+	}
+
+	// After Phase-2 rollback, the first wav should have been removed.
+	if _, err := os.Stat(goodPath); !os.IsNotExist(err) {
+		t.Errorf("first.wav should not exist after Phase-2 rollback; stat err=%v", err)
+	}
+	if _, err := os.Stat(badPath); !os.IsNotExist(err) {
+		t.Errorf("second.wav should not exist; stat err=%v", err)
+	}
+}
