@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -80,6 +81,17 @@ type Session struct {
 	log *slog.Logger
 }
 
+// trackState holds per-track counters and timestamps accumulated during Run.
+type trackState struct {
+	mu            sync.Mutex
+	startedAt     time.Time
+	endedAt       time.Time
+	framesWritten int64
+	bytesWritten  int64
+	drops         int64
+	err           error
+}
+
 // New validates cfg and returns a Session ready to Run. It does NOT start
 // any sources — Run does that.
 func New(cfg Config) (*Session, error) {
@@ -129,6 +141,7 @@ func (s *Session) Run(ctx context.Context) error {
 	defer cancel()
 
 	// Phase 1: Start every source. Track which ones started for rollback.
+	// Also prepare trackStates (will be fully allocated in Phase 3).
 	started := make([]bool, len(s.cfg.Tracks))
 	for i, tr := range s.cfg.Tracks {
 		if err := tr.Source.Start(ctx); err != nil {
@@ -164,12 +177,19 @@ func (s *Session) Run(ctx context.Context) error {
 	s.emit(Event{Kind: EventStarted})
 
 	// Phase 3: Writer goroutines + flush ticker + supervisor.
+	// Record session start time and create per-track state.
+	sessionStartedAt := time.Now()
+	trackStates := make([]*trackState, len(s.cfg.Tracks))
+	for i := range s.cfg.Tracks {
+		trackStates[i] = &trackState{}
+	}
+
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(s.cfg.Tracks))
 
 	for i := range s.cfg.Tracks {
 		wg.Add(1)
-		go s.runWriter(i, writers[i], &wg, errCh)
+		go s.runWriter(i, writers[i], trackStates[i], &wg, errCh)
 	}
 
 	stopTicker := make(chan struct{})
@@ -192,16 +212,78 @@ func (s *Session) Run(ctx context.Context) error {
 			errs = append(errs, e)
 		}
 	}
-	return errors.Join(errs...)
+	runErr := errors.Join(errs...)
+
+	// Build and write manifest.
+	sessionEndedAt := time.Now()
+	trackManifests := make([]TrackManifest, len(s.cfg.Tracks))
+	for i, tr := range s.cfg.Tracks {
+		ts := trackStates[i]
+		ts.mu.Lock()
+		startedAt := ts.startedAt
+		endedAt := ts.endedAt
+		framesWritten := ts.framesWritten
+		bytesWritten := ts.bytesWritten
+		drops := ts.drops
+		trackErr := ts.err
+		ts.mu.Unlock()
+
+		errStr := (*string)(nil)
+		if trackErr != nil {
+			es := trackErr.Error()
+			errStr = &es
+		}
+
+		trackManifests[i] = TrackManifest{
+			Label:         tr.Label,
+			Path:          filepath.Base(tr.Path), // basename only
+			Format:        tr.Source.Format(),
+			StartedAt:     startedAt,
+			EndedAt:       endedAt,
+			FramesWritten: framesWritten,
+			BytesWritten:  bytesWritten,
+			Drops:         drops,
+			Error:         errStr,
+		}
+	}
+
+	sessionID := filepath.Base(sessionDir(s.cfg.Tracks))
+	if sessionID == "" {
+		sessionID = sessionStartedAt.Format("20060102-150405")
+	}
+
+	manifest := &Manifest{
+		Version:   ManifestVersion,
+		SessionID: sessionID,
+		StartedAt: sessionStartedAt,
+		EndedAt:   sessionEndedAt,
+		Tracks:    trackManifests,
+	}
+	manifest.DurationSeconds = manifest.EndedAt.Sub(manifest.StartedAt).Seconds()
+
+	dir := sessionDir(s.cfg.Tracks)
+	if dir != "" {
+		path := filepath.Join(dir, "manifest.json")
+		if err := WriteManifestJSON(path, manifest); err != nil {
+			s.log.Warn("manifest write failed", "err", err)
+		}
+	}
+
+	return runErr
 }
 
 // runWriter drains frames from one source into one wav writer. Exits when
 // the source's channel closes. Collects the source's Err() and any write
-// error into errCh.
-func (s *Session) runWriter(i int, w Writer, wg *sync.WaitGroup, errCh chan<- error) {
+// error into errCh. Accumulates per-track counters and timestamps into ts.
+func (s *Session) runWriter(i int, w Writer, ts *trackState, wg *sync.WaitGroup, errCh chan<- error) {
 	defer wg.Done()
 	tr := s.cfg.Tracks[i]
 	tlog := logging.WithTrack(s.log, tr.Label)
+
+	// Capture track start time.
+	ts.mu.Lock()
+	ts.startedAt = time.Now()
+	ts.mu.Unlock()
 
 	var writeErr error
 	for f := range tr.Source.Frames() {
@@ -214,15 +296,43 @@ func (s *Session) runWriter(i int, w Writer, wg *sync.WaitGroup, errCh chan<- er
 			}
 			break
 		}
+		// Accumulate frame and byte counters.
+		ts.mu.Lock()
+		ts.framesWritten += int64(f.NumFrames)
+		ts.bytesWritten += int64(len(f.Data))
+		ts.mu.Unlock()
 	}
 	// Final flush + close happens here on the same goroutine → no races.
 	if closeErr := w.Close(); closeErr != nil && writeErr == nil {
 		writeErr = closeErr
 	}
 
+	// Capture track end time and gather drops.
+	ts.mu.Lock()
+	ts.endedAt = time.Now()
+	// Try to get drops from source if it exposes Drops() method.
+	if d, ok := tr.Source.(interface{ Drops() int64 }); ok {
+		ts.drops = d.Drops()
+	}
+	ts.mu.Unlock()
+
 	srcErr := tr.Source.Err()
 	s.emit(Event{Kind: EventTrackEnded, Track: tr.Label, Err: firstNonNil(srcErr, writeErr)})
 
+	// Store combined error as string for manifest.
+	ts.mu.Lock()
+	switch {
+	case srcErr != nil && writeErr != nil:
+		errStr := fmt.Sprintf("track %q: %v (write: %v)", tr.Label, srcErr, writeErr)
+		ts.err = errors.New(errStr)
+	case srcErr != nil:
+		ts.err = srcErr
+	case writeErr != nil:
+		ts.err = writeErr
+	}
+	ts.mu.Unlock()
+
+	// Return error for joining in Run.
 	switch {
 	case srcErr != nil && writeErr != nil:
 		errCh <- fmt.Errorf("track %q: %w (write: %w)", tr.Label, srcErr, writeErr)
