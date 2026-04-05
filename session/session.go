@@ -297,12 +297,11 @@ func (s *Session) runWriter(i int, w Writer, wg *sync.WaitGroup, errCh chan<- er
 			s.emit(Event{Kind: EventFlushed})
 
 		case <-segTickC:
-			// Rotate: close current, open next.
-			if err := w.Flush(); err == nil {
-				_ = w.Close()
-			} else {
-				_ = w.Close()
+			// Rotate: flush + close current (best-effort), then open next.
+			if flushErr := w.Flush(); flushErr != nil {
+				tlog.Debug("rotation flush failed", "err", flushErr)
 			}
+			_ = w.Close()
 
 			segment++
 			newPath := segmentPath(tr.Path, segment)
@@ -310,9 +309,13 @@ func (s *Session) runWriter(i int, w Writer, wg *sync.WaitGroup, errCh chan<- er
 			if err != nil {
 				tlog.Error("segment rotation failed", "segment", segment, "err", err)
 				s.emit(Event{Kind: EventError, Track: tr.Label, Err: err})
-				// Drain remaining frames and exit.
+				// Drain remaining frames and exit. Report the failure
+				// to the supervisor so Run returns a non-nil error;
+				// otherwise a rotation failure silently ends this
+				// track while Run reports success.
 				for range framesCh {
 				}
+				errCh <- fmt.Errorf("track %q: segment rotation: %w", tr.Label, err)
 				return
 			}
 
