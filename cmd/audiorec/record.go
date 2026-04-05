@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,6 +24,8 @@ func runRecord(args []string) error {
 		sessionName   = fs.String("session-name", "", "session subdirectory name (default: timestamp)")
 		micFlag       = fs.String("mic", "default", `microphone: "default", "none", or a device name`)
 		systemFlag    = fs.String("system", "default", `system audio: "default", "none", or a device name`)
+		includeApps   = fs.String("include-app", "", "macOS only: comma-separated bundle identifiers to capture audio from (mutually exclusive with --exclude-app)")
+		excludeApps   = fs.String("exclude-app", "", "macOS only: comma-separated bundle identifiers to exclude from audio capture (mutually exclusive with --include-app)")
 		duration      = fs.Duration("d", 0, "optional hard-stop duration (e.g. 30m); 0 = record until SIGINT")
 		flushInterval = fs.Duration("flush-interval", 2*time.Second, "WAV header flush interval")
 		verbose       = fs.Bool("v", false, "verbose (debug) logging")
@@ -40,6 +43,12 @@ func runRecord(args []string) error {
 	}
 	if *micFlag == "none" && *systemFlag == "none" {
 		return errors.New("at least one of --mic or --system must be enabled")
+	}
+	if *includeApps != "" && *excludeApps != "" {
+		return errors.New("--include-app and --exclude-app are mutually exclusive")
+	}
+	if (*includeApps != "" || *excludeApps != "") && runtime.GOOS != "darwin" {
+		return errors.New("--include-app and --exclude-app are only supported on macOS")
 	}
 
 	level := slog.LevelInfo
@@ -93,7 +102,19 @@ func runRecord(args []string) error {
 			})
 		} else {
 			// default
-			sys := audiorec.NewSystemAudioCapture()
+			var sys audiorec.Source
+			if *includeApps != "" || *excludeApps != "" {
+				// Parse comma-separated bundle IDs and create config.
+				config := audiorec.SystemAudioConfig{}
+				if *includeApps != "" {
+					config.IncludeBundleIDs = parseCommaSeparated(*includeApps)
+				} else if *excludeApps != "" {
+					config.ExcludeBundleIDs = parseCommaSeparated(*excludeApps)
+				}
+				sys = audiorec.NewSystemAudioCaptureWithConfig(config)
+			} else {
+				sys = audiorec.NewSystemAudioCapture()
+			}
 			tracks = append(tracks, audiorec.Track{
 				Source: sys,
 				Path:   filepath.Join(sessDir, "system.wav"),
@@ -140,4 +161,16 @@ then re-run. Microphone-only recording still works without it
 	}
 	logger.Info("recording stopped cleanly", "dir", sessDir)
 	return nil
+}
+
+// parseCommaSeparated splits a comma-separated string and returns the
+// non-empty trimmed parts.
+func parseCommaSeparated(s string) []string {
+	var result []string
+	for _, part := range strings.Split(s, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
