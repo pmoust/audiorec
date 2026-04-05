@@ -65,7 +65,10 @@ sck_capture_t* sck_capture_create(sck_audio_cb cb, void* user) {
     return c;
 }
 
-int sck_capture_start(sck_capture_t* c) {
+int sck_capture_start_filtered(sck_capture_t* c,
+                               const char** bundleIDs,
+                               int bundleIDCount,
+                               int include) {
     if (c == NULL) return 5;
 
     __block NSError* blockErr = nil;
@@ -95,8 +98,36 @@ int sck_capture_start(sck_capture_t* c) {
         return c->last_error;
     }
 
-    SCContentFilter* filter = [[SCContentFilter alloc] initWithDisplay:content.displays.firstObject
-                                                      excludingWindows:@[]];
+    SCDisplay* display = content.displays.firstObject;
+
+    // Resolve bundleIDs → SCRunningApplication instances.
+    NSMutableArray<SCRunningApplication*>* matchedApps = [NSMutableArray array];
+    for (int i = 0; i < bundleIDCount; i++) {
+        NSString* wanted = [NSString stringWithUTF8String:bundleIDs[i]];
+        for (SCRunningApplication* app in content.applications) {
+            if ([app.bundleIdentifier isEqualToString:wanted]) {
+                [matchedApps addObject:app];
+                break;
+            }
+        }
+    }
+
+    // Build the filter.
+    SCContentFilter* filter;
+    if (bundleIDCount == 0) {
+        // Default: capture everything on the display.
+        filter = [[SCContentFilter alloc] initWithDisplay:display
+                                         excludingWindows:@[]];
+    } else if (include) {
+        filter = [[SCContentFilter alloc] initWithDisplay:display
+                                    includingApplications:matchedApps
+                                         exceptingWindows:@[]];
+    } else {
+        filter = [[SCContentFilter alloc] initWithDisplay:display
+                                    excludingApplications:matchedApps
+                                         exceptingWindows:@[]];
+    }
+
     SCStreamConfiguration* cfg = [[SCStreamConfiguration alloc] init];
     cfg.capturesAudio = YES;
     cfg.excludesCurrentProcessAudio = YES;
@@ -142,6 +173,10 @@ int sck_capture_start(sck_capture_t* c) {
     c->stream = stream;
     c->last_error = 0;
     return 0;
+}
+
+int sck_capture_start(sck_capture_t* c) {
+    return sck_capture_start_filtered(c, NULL, 0, 0);
 }
 
 void sck_capture_stop(sck_capture_t* c) {

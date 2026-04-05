@@ -7,6 +7,7 @@ package sck
 #cgo LDFLAGS: -framework Foundation -framework ScreenCaptureKit -framework CoreMedia
 
 #include <stdint.h>
+#include <stdlib.h>
 #include "sck_bridge.h"
 
 extern void audiorecSCKAudioCallback(float* data, int numFrames, int channels, int sampleRate, void* user);
@@ -175,7 +176,40 @@ func (c *Capture) Start(ctx context.Context) error {
 		return fmt.Errorf("sck: create failed")
 	}
 
-	if rc := C.sck_capture_start(c.handle); rc != 0 {
+	// Build C string array from c.config.IncludeBundleIDs or ExcludeBundleIDs.
+	var cBundleIDs **C.char
+	var count C.int
+	var include C.int
+	var cstrs []*C.char
+
+	if len(c.config.IncludeBundleIDs) > 0 {
+		ids := c.config.IncludeBundleIDs
+		include = 1
+		cstrs = make([]*C.char, len(ids))
+		for i, s := range ids {
+			cstrs[i] = C.CString(s)
+		}
+		cBundleIDs = (**C.char)(unsafe.Pointer(&cstrs[0]))
+		count = C.int(len(ids))
+	} else if len(c.config.ExcludeBundleIDs) > 0 {
+		ids := c.config.ExcludeBundleIDs
+		include = 0
+		cstrs = make([]*C.char, len(ids))
+		for i, s := range ids {
+			cstrs[i] = C.CString(s)
+		}
+		cBundleIDs = (**C.char)(unsafe.Pointer(&cstrs[0]))
+		count = C.int(len(ids))
+	}
+
+	rc := C.sck_capture_start_filtered(c.handle, cBundleIDs, count, include)
+
+	// Free C strings after the call returns.
+	for _, s := range cstrs {
+		C.free(unsafe.Pointer(s))
+	}
+
+	if rc != 0 {
 		code := int(C.sck_capture_last_error_code(c.handle))
 		C.sck_capture_destroy(c.handle)
 		c.handle = nil
