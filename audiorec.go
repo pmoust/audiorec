@@ -15,7 +15,6 @@ package audiorec
 
 import (
 	"github.com/pmoust/audiorec/backend/malgo"
-	"github.com/pmoust/audiorec/backend/sck"
 	"github.com/pmoust/audiorec/session"
 	"github.com/pmoust/audiorec/source"
 )
@@ -76,4 +75,3 @@ func NewSystemAudioCapture() Source {
 func EnumerateMalgoDevices() ([]DeviceInfo, error) { return malgo.Enumerate() }
 
 // newSystemAudioDefault is provided by platform-specific files below.
-var _ = sck.NewSystemAudio // ensure sck is reachable on both platforms (stub on non-darwin)
