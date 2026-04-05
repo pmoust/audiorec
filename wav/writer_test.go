@@ -260,3 +260,66 @@ func TestCrashRecovery_FlushedDataIsPlayable(t *testing.T) {
 		}
 	}
 }
+
+func TestClose_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	w, err := Create(filepath.Join(dir, "x.wav"), source.Format{
+		SampleRate:    48000,
+		Channels:      1,
+		BitsPerSample: 16,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close 1: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Errorf("Close 2 (should be no-op): %v", err)
+	}
+}
+
+func TestWrite_FloatPCM_SetsCorrectFormatTag(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "float.wav")
+	w, err := Create(path, source.Format{
+		SampleRate:    48000,
+		Channels:      2,
+		BitsPerSample: 32,
+		Float:         true,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// 4 stereo float samples = 32 bytes
+	if err := w.WriteFrame(source.Frame{Data: make([]byte, 32), NumFrames: 4}); err != nil {
+		t.Fatalf("WriteFrame: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	h := readHeader(t, path)
+	if got := binary.LittleEndian.Uint16(h[20:22]); got != wavFormatIEEE {
+		t.Errorf("audio format: got %d want %d (IEEE_FLOAT)", got, wavFormatIEEE)
+	}
+	if got := binary.LittleEndian.Uint16(h[34:36]); got != 32 {
+		t.Errorf("bits per sample: got %d want 32", got)
+	}
+}
+
+func TestValidateFormat_Rejects(t *testing.T) {
+	cases := []source.Format{
+		{SampleRate: 0, Channels: 1, BitsPerSample: 16},
+		{SampleRate: 48000, Channels: 0, BitsPerSample: 16},
+		{SampleRate: 48000, Channels: 9, BitsPerSample: 16},
+		{SampleRate: 48000, Channels: 1, BitsPerSample: 24},
+		{SampleRate: 48000, Channels: 1, BitsPerSample: 16, Float: true}, // float must be 32-bit
+	}
+	dir := t.TempDir()
+	for i, f := range cases {
+		_, err := Create(filepath.Join(dir, "bad.wav"), f)
+		if err == nil {
+			t.Errorf("case %d: expected error for format %+v", i, f)
+		}
+	}
+}
