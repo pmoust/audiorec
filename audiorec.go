@@ -52,8 +52,9 @@ type (
 
 func NewSession(cfg SessionConfig) (*Session, error) { return session.New(cfg) }
 
-// Backend constructors. These are thin wrappers so library callers don't
-// need to import sub-packages for the common case.
+// CaptureConfig is a re-export of malgo.CaptureConfig so library callers
+// don't need to import backend/malgo for the common case of constructing
+// a microphone or monitor capture.
 type CaptureConfig = malgo.CaptureConfig
 
 func NewMicCapture(cfg CaptureConfig) *malgo.Capture { return malgo.NewCapture(cfg) }

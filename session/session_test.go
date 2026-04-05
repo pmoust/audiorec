@@ -89,7 +89,7 @@ func assertWavDataSize(t *testing.T, path string, expectedBytes int, fill byte) 
 	if got != expectedBytes {
 		t.Errorf("%s: data size: got %d want %d", path, got, expectedBytes)
 	}
-	for i := 0; i < expectedBytes; i++ {
+	for i := range expectedBytes {
 		if b[44+i] != fill {
 			t.Errorf("%s: byte %d: got %#x want %#x", path, i, b[44+i], fill)
 			return

@@ -1,0 +1,87 @@
+# golangci-lint configuration for audiorec.
+#
+# Philosophy: enable correctness-focused linters that catch real bugs with
+# low false-positive rates. Skip opinionated style linters (revive, gocritic,
+# gocyclo, gocognit) until the project has an established style to encode.
+#
+# Run locally: golangci-lint run
+# Update:      brew upgrade golangci-lint
+
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    # Correctness (high value, low noise)
+    - errcheck       # unchecked errors
+    - govet          # standard vet checks
+    - ineffassign    # ineffective assignments
+    - staticcheck    # comprehensive static analysis (includes gosimple + stylecheck)
+    - unused         # unused constants, variables, functions, types
+
+    # Error handling hygiene
+    - errorlint      # ensures errors.Is/As are used instead of == / type assertions
+    - nilerr         # returning nil after a non-nil error check
+
+    # Go 1.22+ semantic correctness
+    - copyloopvar    # loop variable capture (Go 1.22 semantics)
+    - intrange       # prefer range-over-int idiom
+
+    # Minor cleanups (cheap signal)
+    - misspell       # common English misspellings
+    - unconvert      # unnecessary type conversions
+    - unparam        # unused function parameters
+    - whitespace     # trailing whitespace and extra blank lines
+
+  settings:
+    errcheck:
+      # Don't flag explicitly-discarded errors; `_ = f.Close()` is a deliberate
+      # pattern in this codebase for best-effort cleanup paths.
+      check-blank: false
+      # Close on os.File, net.Conn, etc. — commonly deferred and ignored.
+      exclude-functions:
+        - (*os.File).Close
+        - (io.Closer).Close
+
+    staticcheck:
+      # Default checks are fine. Keep ST1000 (package comment) off for
+      # internal packages.
+      checks:
+        - all
+        - -ST1000  # missing package comment (noisy for internal/*)
+
+    unparam:
+      check-exported: false
+
+  exclusions:
+    # Test files get more latitude: unused struct fields are often set via
+    # reflection or table tests, and `errcheck` fires on cleanup calls that
+    # are intentionally ignored.
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - unparam
+          - unused
+
+      # The sck cgo bridge has unusual patterns (cgo.Handle-like registry,
+      # Obj-C callback entry points) that confuse several linters. The code
+      # was hand-reviewed and vetted separately; skip it here.
+      - path: backend/sck/sck_darwin\.go
+        linters:
+          - unused
+          - unparam
+
+      # fakeSource is a test helper whose fields are exercised by setting
+      # them directly before passing to a session. unused's field analysis
+      # doesn't track that pattern cleanly.
+      - path: session/fakesource_test\.go
+        linters:
+          - unused
+
+formatters:
+  enable:
+    - gofmt

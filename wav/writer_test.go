@@ -121,7 +121,7 @@ func TestWriteFrame_AppendsPCMAndCountsBytes(t *testing.T) {
 		t.Fatalf("file size: got %d want %d", len(b), headerSize+20)
 	}
 	// PCM bytes should match what we wrote.
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		if b[headerSize+i] != byte(i) {
 			t.Errorf("pcm[%d]: got %d want %d", i, b[headerSize+i], i)
 		}
@@ -253,7 +253,7 @@ func TestCrashRecovery_FlushedDataIsPlayable(t *testing.T) {
 		t.Errorf("file too short: %d < %d", len(b), headerSize+200)
 	}
 	// Sanity: first 200 data bytes are 0xAB.
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		if b[headerSize+i] != 0xAB {
 			t.Errorf("data[%d]: got %#x want 0xAB", i, b[headerSize+i])
 			break

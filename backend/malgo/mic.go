@@ -204,11 +204,11 @@ func mapError(err error) error {
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "permission") || strings.Contains(msg, "not authorized"):
-		return fmt.Errorf("%w: %v", source.ErrPermissionDenied, err)
+		return fmt.Errorf("%w: %w", source.ErrPermissionDenied, err)
 	case strings.Contains(msg, "device not found") || strings.Contains(msg, "no such device"):
-		return fmt.Errorf("%w: %v", source.ErrDeviceNotFound, err)
+		return fmt.Errorf("%w: %w", source.ErrDeviceNotFound, err)
 	case strings.Contains(msg, "disconnected"):
-		return fmt.Errorf("%w: %v", source.ErrDeviceDisconnected, err)
+		return fmt.Errorf("%w: %w", source.ErrDeviceDisconnected, err)
 	default:
 		return err
 	}

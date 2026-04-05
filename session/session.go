@@ -114,7 +114,7 @@ func (s *Session) Run(ctx context.Context) error {
 	for i, tr := range s.cfg.Tracks {
 		if err := tr.Source.Start(ctx); err != nil {
 			// Rollback: close already-started sources.
-			for j := 0; j < i; j++ {
+			for j := range i {
 				if started[j] {
 					_ = s.cfg.Tracks[j].Source.Close()
 				}
@@ -130,7 +130,7 @@ func (s *Session) Run(ctx context.Context) error {
 		w, err := wav.Create(tr.Path, tr.Source.Format())
 		if err != nil {
 			// Rollback: close writers created so far, all sources, remove files.
-			for j := 0; j < i; j++ {
+			for j := range i {
 				_ = writers[j].Close()
 				_ = os.Remove(s.cfg.Tracks[j].Path)
 			}
@@ -206,7 +206,7 @@ func (s *Session) runWriter(i int, w *wav.Writer, wg *sync.WaitGroup, errCh chan
 
 	switch {
 	case srcErr != nil && writeErr != nil:
-		errCh <- fmt.Errorf("track %q: %w (write: %v)", tr.Label, srcErr, writeErr)
+		errCh <- fmt.Errorf("track %q: %w (write: %w)", tr.Label, srcErr, writeErr)
 	case srcErr != nil:
 		errCh <- fmt.Errorf("track %q: %w", tr.Label, srcErr)
 	case writeErr != nil:
