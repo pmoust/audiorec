@@ -272,3 +272,66 @@ func TestRun_FlushTickerError_EmitsEventErrorAndContinues(t *testing.T) {
 	// We don't assert on file content directly since the flaky writer's
 	// Close() path may also error — the key assertion is event emission.
 }
+
+func TestRun_Segmentation_RotatesEveryInterval(t *testing.T) {
+	dir := t.TempDir()
+	f := source.Format{SampleRate: 48000, Channels: 1, BitsPerSample: 16}
+
+	// Produce frames over ~300ms; with 100ms segments we expect 3-4 rotations.
+	src := newFakeSource(f, makeFrames(30, 20, 0xAA))
+	src.delay = 10 * time.Millisecond
+
+	var rotations int32
+	s, err := New(Config{
+		Tracks: []Track{
+			{Source: src, Path: filepath.Join(dir, "mic.wav"), Label: "mic"},
+		},
+		SegmentDuration: 100 * time.Millisecond,
+		FlushInterval:   50 * time.Millisecond,
+		OnEvent: func(ev Event) {
+			if ev.Kind == EventSegmentRotated && ev.Track == "mic" {
+				atomic.AddInt32(&rotations, 1)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Expect at least 2 segment files on disk.
+	matches, err := filepath.Glob(filepath.Join(dir, "mic-*.wav"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(matches) < 2 {
+		t.Errorf("expected at least 2 segment files, got %d: %v", len(matches), matches)
+	}
+
+	// Every segment file must be a valid (non-empty) WAV.
+	for _, m := range matches {
+		info, err := os.Stat(m)
+		if err != nil {
+			t.Errorf("stat %s: %v", m, err)
+			continue
+		}
+		if info.Size() <= 44 {
+			t.Errorf("%s too small (%d bytes); header-only", m, info.Size())
+		}
+	}
+
+	// Rotation events should have fired.
+	if n := atomic.LoadInt32(&rotations); n < 1 {
+		t.Errorf("expected at least 1 rotation event, got %d", n)
+	}
+
+	// Unrotated path should NOT exist (no mic.wav, only mic-001.wav etc).
+	if _, err := os.Stat(filepath.Join(dir, "mic.wav")); !os.IsNotExist(err) {
+		t.Errorf("mic.wav (unsegmented name) should not exist; err=%v", err)
+	}
+}
