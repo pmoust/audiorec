@@ -152,3 +152,111 @@ func TestWriteFrame_RejectsMisalignedData(t *testing.T) {
 		t.Fatalf("expected error for misaligned data")
 	}
 }
+
+func TestFlush_UpdatesHeaderLengths(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "flush.wav")
+
+	w, err := Create(path, source.Format{
+		SampleRate:    48000,
+		Channels:      1,
+		BitsPerSample: 16,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer w.Close()
+
+	pcm := make([]byte, 100) // 50 mono 16-bit samples
+	if err := w.WriteFrame(source.Frame{Data: pcm, NumFrames: 50}); err != nil {
+		t.Fatalf("WriteFrame: %v", err)
+	}
+
+	// Read header BEFORE flush — length fields should still reflect zero
+	// because Create wrote a zero-length header and WriteFrame doesn't
+	// touch it.
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("pre-flush read: %v", err)
+	}
+	if got := binary.LittleEndian.Uint32(b[dataSizeOff : dataSizeOff+4]); got != 0 {
+		t.Errorf("pre-flush data size: got %d want 0", got)
+	}
+
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	b, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("post-flush read: %v", err)
+	}
+	if got := binary.LittleEndian.Uint32(b[dataSizeOff : dataSizeOff+4]); got != 100 {
+		t.Errorf("post-flush data size: got %d want 100", got)
+	}
+	if got := binary.LittleEndian.Uint32(b[riffSizeOff : riffSizeOff+4]); got != 36+100 {
+		t.Errorf("post-flush riff size: got %d want %d", got, 36+100)
+	}
+}
+
+// TestCrashRecovery simulates kill -9 by NOT calling Close. After Flush,
+// the file on disk must be a valid playable WAV containing the pre-flush
+// samples.
+func TestCrashRecovery_FlushedDataIsPlayable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crash.wav")
+
+	w, err := Create(path, source.Format{
+		SampleRate:    48000,
+		Channels:      2,
+		BitsPerSample: 16,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Write 200 bytes (50 stereo 16-bit samples), flush, write 40 more
+	// bytes that will NOT be flushed.
+	pcm1 := make([]byte, 200)
+	for i := range pcm1 {
+		pcm1[i] = 0xAB
+	}
+	if err := w.WriteFrame(source.Frame{Data: pcm1, NumFrames: 50}); err != nil {
+		t.Fatalf("WriteFrame 1: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	pcm2 := make([]byte, 40)
+	for i := range pcm2 {
+		pcm2[i] = 0xCD
+	}
+	if err := w.WriteFrame(source.Frame{Data: pcm2, NumFrames: 10}); err != nil {
+		t.Fatalf("WriteFrame 2: %v", err)
+	}
+	// DO NOT call Close — simulate crash.
+	// Leak the *os.File handle intentionally. On most OSes the kernel will
+	// keep the write durable since we fsync'd in Flush.
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Header must reflect 200 bytes of data (what was flushed).
+	if got := binary.LittleEndian.Uint32(b[dataSizeOff : dataSizeOff+4]); got != 200 {
+		t.Errorf("data size: got %d want 200", got)
+	}
+	// File on disk may contain the unflushed tail bytes too (240 total),
+	// but players honor the header's data size of 200 and ignore the tail.
+	if len(b) < headerSize+200 {
+		t.Errorf("file too short: %d < %d", len(b), headerSize+200)
+	}
+	// Sanity: first 200 data bytes are 0xAB.
+	for i := 0; i < 200; i++ {
+		if b[headerSize+i] != 0xAB {
+			t.Errorf("data[%d]: got %#x want 0xAB", i, b[headerSize+i])
+			break
+		}
+	}
+}

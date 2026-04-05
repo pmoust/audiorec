@@ -154,3 +154,25 @@ func (w *Writer) WriteFrame(f source.Frame) error {
 	w.bytesWritten += int64(n)
 	return nil
 }
+
+// Flush rewrites the WAV header length fields to reflect all PCM data
+// written so far, then fsyncs the file. After a successful Flush, the file
+// on disk is a valid playable WAV even if the process dies immediately
+// afterward.
+//
+// Flush is the ONLY operation that touches the header — there is a single
+// code path for header updates.
+func (w *Writer) Flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return errors.New("wav: Flush on closed writer")
+	}
+	if err := w.writeHeader(); err != nil {
+		return err
+	}
+	if err := w.f.Sync(); err != nil {
+		return fmt.Errorf("wav: flush sync: %w", err)
+	}
+	return nil
+}
