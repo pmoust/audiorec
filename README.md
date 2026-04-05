@@ -5,6 +5,8 @@
 
 Go library and CLI for recording microphone + system audio as separate crash-safe WAV files on macOS and Linux. Designed for meeting and interview capture.
 
+**CLI users:** see [`docs/user-guide.md`](docs/user-guide.md) for the full walkthrough — install, first recording, device selection, macOS permissions, Linux setup, flag reference, common workflows, troubleshooting, and FAQ.
+
 ## Features
 
 - **Separate tracks** — mic and system audio land in two independent WAV files, ready for per-speaker transcription or DAW post-processing.
