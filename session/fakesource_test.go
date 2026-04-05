@@ -16,11 +16,11 @@ import (
 // frames to an unbuffered channel. The producer watches ctx for cancellation
 // and exits cleanly.
 type fakeSource struct {
-	format  source.Format
-	frames  []source.Frame
-	delay   time.Duration // between frames
-	endErr  error         // returned from Err() after channel closes
-	startErr error        // returned from Start() immediately (simulates failed open)
+	format   source.Format
+	frames   []source.Frame
+	delay    time.Duration // between frames
+	endErr   error         // returned from Err() after channel closes
+	startErr error         // returned from Start() immediately (simulates failed open)
 
 	ch     chan source.Frame
 	once   sync.Once
