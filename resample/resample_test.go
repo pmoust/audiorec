@@ -89,7 +89,7 @@ func makeInt16StereoFrame(left, right []int16) source.Frame {
 		panic("left and right must have equal length")
 	}
 	data := make([]byte, len(left)*4)
-	for i := 0; i < len(left); i++ {
+	for i := range left {
 		binary.LittleEndian.PutUint16(data[i*4:], uint16(left[i]))
 		binary.LittleEndian.PutUint16(data[i*4+2:], uint16(right[i]))
 	}
@@ -401,7 +401,7 @@ func TestResample_PreservesSineWave(t *testing.T) {
 	// Generate 1 second of 440 Hz sine at 44100 Hz.
 	numSamples := srcRate
 	samples := make([]int16, numSamples)
-	for i := 0; i < numSamples; i++ {
+	for i := range samples {
 		phase := 2.0 * math.Pi * frequency * float64(i) / float64(srcRate)
 		sample := math.Sin(phase)
 		samples[i] = int16(sample * 30000) // Scale to int16 range

@@ -34,7 +34,6 @@ type resamplingSource struct {
 	resamp *resampler
 
 	outCh chan source.Frame
-	err   error
 }
 
 func (rs *resamplingSource) Format() source.Format {
@@ -50,7 +49,7 @@ func (rs *resamplingSource) Start(ctx context.Context) error {
 	rs.format.SampleRate = rs.targetRate
 
 	rs.resamp = newResampler(
-		float64(rs.targetRate) / float64(rs.inner.Format().SampleRate),
+		float64(rs.targetRate)/float64(rs.inner.Format().SampleRate),
 		rs.inner.Format().Channels,
 		rs.inner.Format().BitsPerSample,
 		rs.inner.Format().Float,
@@ -91,11 +90,11 @@ func (rs *resamplingSource) Close() error {
 // It maintains per-channel fractional position and the previous frame's last sample
 // so interpolation can span frame boundaries.
 type resampler struct {
-	ratio         float64   // targetRate / sourceRate
+	ratio         float64 // targetRate / sourceRate
 	channels      int
 	bitsPerSample int
 	float32       bool
-	invRatio      float64   // 1.0 / ratio, i.e., sourceRate / targetRate
+	invRatio      float64 // 1.0 / ratio, i.e., sourceRate / targetRate
 
 	// Per-channel state:
 	// pos: fractional position within the cumulative input stream
@@ -142,7 +141,7 @@ func (r *resampler) processInt16(inFrame source.Frame) source.Frame {
 	// Negative pos means we're working off the previous frame's state but can't generate yet.
 	for outPos < outMaxN {
 		canGenerate := false
-		for ch := 0; ch < r.channels; ch++ {
+		for ch := range r.channels {
 			// We can generate a sample if we have two consecutive input samples to interpolate.
 			// If pos is in range [i, i+1) where i < inN-1, both samples i and i+1 exist.
 			// If pos < 0, it refers to the previous frame's last sample, which we have in prevLastSample.
@@ -158,7 +157,7 @@ func (r *resampler) processInt16(inFrame source.Frame) source.Frame {
 		}
 
 		// Generate one output sample across all channels.
-		for ch := 0; ch < r.channels; ch++ {
+		for ch := range r.channels {
 			pos := r.pos[ch]
 
 			var s0, s1 float64
@@ -166,7 +165,7 @@ func (r *resampler) processInt16(inFrame source.Frame) source.Frame {
 
 			if pos < 0 && pos+1.0 >= 0 {
 				// Interpolate between prevLastSample and inData[0].
-				i0 := int(pos) // will be -1
+				i0 := int(pos)           // will be -1
 				frac = pos - float64(i0) // frac = pos - (-1) = pos + 1
 				s0 = r.prevLastSample[ch]
 				s1 = float64(int16(binary.LittleEndian.Uint16(inData[ch*2:])))
@@ -188,7 +187,7 @@ func (r *resampler) processInt16(inFrame source.Frame) source.Frame {
 		}
 
 		// Advance all channels.
-		for ch := 0; ch < r.channels; ch++ {
+		for ch := range r.channels {
 			r.pos[ch] += r.invRatio
 		}
 		outPos++
@@ -196,11 +195,11 @@ func (r *resampler) processInt16(inFrame source.Frame) source.Frame {
 
 	// Save the last sample of this frame for use in the next frame's cross-boundary interpolation.
 	if inN > 0 {
-		for ch := 0; ch < r.channels; ch++ {
+		for ch := range r.channels {
 			r.prevLastSample[ch] = float64(int16(binary.LittleEndian.Uint16(inData[((inN-1)*r.channels+ch)*2:])))
 		}
 		// Adjust positions: subtract inN so that in the next frame, pos=0 refers to the first sample.
-		for ch := 0; ch < r.channels; ch++ {
+		for ch := range r.channels {
 			r.pos[ch] -= float64(inN)
 		}
 	}
@@ -225,7 +224,7 @@ func (r *resampler) processFloat32(inFrame source.Frame) source.Frame {
 	// Generate output samples.
 	for outPos < outMaxN {
 		canGenerate := false
-		for ch := 0; ch < r.channels; ch++ {
+		for ch := range r.channels {
 			// We can generate a sample if we have two consecutive input samples to interpolate.
 			if (r.pos[ch] < 0 && r.pos[ch]+1.0 >= 0) ||
 				(r.pos[ch] >= 0 && r.pos[ch] < float64(inN-1)) {
@@ -239,7 +238,7 @@ func (r *resampler) processFloat32(inFrame source.Frame) source.Frame {
 		}
 
 		// Generate one output sample across all channels.
-		for ch := 0; ch < r.channels; ch++ {
+		for ch := range r.channels {
 			pos := r.pos[ch]
 
 			var s0, s1 float64
@@ -247,7 +246,7 @@ func (r *resampler) processFloat32(inFrame source.Frame) source.Frame {
 
 			if pos < 0 && pos+1.0 >= 0 {
 				// Interpolate between prevLastSample and inData[0].
-				i0 := int(pos) // will be -1
+				i0 := int(pos)           // will be -1
 				frac = pos - float64(i0) // frac = pos - (-1) = pos + 1
 				s0 = r.prevLastSample[ch]
 				s1 = float64(math.Float32frombits(binary.LittleEndian.Uint32(inData[ch*4:])))
@@ -268,7 +267,7 @@ func (r *resampler) processFloat32(inFrame source.Frame) source.Frame {
 		}
 
 		// Advance all channels.
-		for ch := 0; ch < r.channels; ch++ {
+		for ch := range r.channels {
 			r.pos[ch] += r.invRatio
 		}
 		outPos++
@@ -276,11 +275,11 @@ func (r *resampler) processFloat32(inFrame source.Frame) source.Frame {
 
 	// Save the last sample of this frame for use in the next frame's cross-boundary interpolation.
 	if inN > 0 {
-		for ch := 0; ch < r.channels; ch++ {
+		for ch := range r.channels {
 			r.prevLastSample[ch] = float64(math.Float32frombits(binary.LittleEndian.Uint32(inData[((inN-1)*r.channels+ch)*4:])))
 		}
 		// Adjust positions.
-		for ch := 0; ch < r.channels; ch++ {
+		for ch := range r.channels {
 			r.pos[ch] -= float64(inN)
 		}
 	}
