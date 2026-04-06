@@ -29,12 +29,23 @@ Go library and CLI for recording microphone + system audio as separate, crash-sa
 
 ## Install
 
+### macOS (Homebrew)
+
 ```bash
-# Latest release via go install (v1.2.0)
-go install github.com/pmoust/audiorec/cmd/audiorec@v1.2.0
+brew install pmoust/audiorec/audiorec
 ```
 
-Pre-built binaries are also available on the [releases page](https://github.com/pmoust/audiorec/releases) — download the archive for your platform, verify the checksum, and put the binary on your `$PATH`. See the [user guide](docs/user-guide.md#install) for the full download + verification steps.
+Builds from source and pulls in codec dependencies (opus, opusfile) automatically.
+
+### From source
+
+```bash
+go install github.com/pmoust/audiorec/cmd/audiorec@latest
+```
+
+### Pre-built binaries
+
+Download from the [releases page](https://github.com/pmoust/audiorec/releases) — archives for linux-amd64 and darwin-arm64 with SHA256 checksums + SLSA provenance attestation. See the [user guide](docs/user-guide.md#install) for the full download + verification steps.
 
 ## Usage
 

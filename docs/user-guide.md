@@ -34,7 +34,21 @@ This guide walks you through installing, recording your first session, understan
 
 ## Install
 
-### Download a pre-built binary (recommended)
+### Homebrew (macOS, recommended)
+
+```sh
+brew install pmoust/audiorec/audiorec
+```
+
+This builds from source and installs codec dependencies (opus, opusfile) automatically. To upgrade after a new release:
+
+```sh
+brew upgrade audiorec
+```
+
+**Note:** the Homebrew formula installs a plain binary, not the `.app` bundle. If you need persistent macOS Screen Recording / Microphone permissions across rebuilds, see the [`.app` bundle section](#macos-prefer-the-app-bundle-for-persistent-permissions) below.
+
+### Download a pre-built binary
 
 Pre-built binaries are published on the [releases page](https://github.com/pmoust/audiorec/releases). Grab the archive for your platform, verify it, extract, and put the binary on your `$PATH`.
 
