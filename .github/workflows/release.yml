@@ -38,7 +38,9 @@ on:
         required: true
 
 permissions:
-  contents: write # gh release create needs this
+  contents: write      # gh release create needs this
+  id-token: write      # OIDC token for provenance attestation
+  attestations: write  # actions/attest-build-provenance needs this
 
 concurrency:
   group: release-${{ github.ref }}
@@ -130,6 +132,11 @@ jobs:
           shasum -a 256 "dist/${name}.tar.gz" > "dist/${name}.tar.gz.sha256"
           ls -la dist/
 
+      - name: Attest build provenance (tarball)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/audiorec-${{ steps.tag.outputs.tag }}-${{ matrix.target }}.tar.gz
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -183,6 +190,11 @@ jobs:
           zip -ry "${name}.zip" audiorec.app
           shasum -a 256 "${name}.zip" > "${name}.zip.sha256"
           ls -la
+
+      - name: Attest build provenance (app bundle)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/audiorec-${{ steps.tag.outputs.tag }}-darwin-arm64-app.zip
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v7
