@@ -56,6 +56,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install Linux audio + codec headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libopus-dev
+
       - name: gofmt
         run: |
           out=$(gofmt -l .)
@@ -90,6 +94,10 @@ jobs:
           go-version-file: go.mod
           cache: false # golangci-lint-action manages its own cache
 
+      - name: Install Linux audio + codec headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libopus-dev
+
       # golangci-lint version pinned to match local dev (brew). Bump in
       # lockstep when upgrading locally. The action version must support
       # golangci-lint v2.x (v7+ does; v6 and earlier did not).
@@ -117,6 +125,10 @@ jobs:
           go-version: ${{ matrix.go != 'go.mod' && matrix.go || '' }}
           go-version-file: ${{ matrix.go == 'go.mod' && 'go.mod' || '' }}
           cache: true
+
+      - name: Install Linux audio + codec headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libopus-dev
 
       - name: Build
         run: go build ./...
@@ -147,6 +159,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Install Linux audio + codec headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libopus-dev
 
       - name: Build CLI
         run: make build
