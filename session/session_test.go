@@ -85,17 +85,17 @@ func assertWavDataSize(t *testing.T, path string, expectedBytes int, fill byte) 
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	if len(b) < 44+expectedBytes {
-		t.Fatalf("%s: file too short: %d < %d", path, len(b), 44+expectedBytes)
+	if len(b) < wav.HeaderSize+expectedBytes {
+		t.Fatalf("%s: file too short: %d < %d", path, len(b), wav.HeaderSize+expectedBytes)
 	}
-	// Byte 40..44 is the data chunk size little-endian.
-	got := int(b[40]) | int(b[41])<<8 | int(b[42])<<16 | int(b[43])<<24
+	// Data chunk size is 32-bit little-endian at DataSizeOff.
+	got := int(b[wav.DataSizeOff]) | int(b[wav.DataSizeOff+1])<<8 | int(b[wav.DataSizeOff+2])<<16 | int(b[wav.DataSizeOff+3])<<24
 	if got != expectedBytes {
 		t.Errorf("%s: data size: got %d want %d", path, got, expectedBytes)
 	}
 	for i := range expectedBytes {
-		if b[44+i] != fill {
-			t.Errorf("%s: byte %d: got %#x want %#x", path, i, b[44+i], fill)
+		if b[wav.HeaderSize+i] != fill {
+			t.Errorf("%s: byte %d: got %#x want %#x", path, i, b[wav.HeaderSize+i], fill)
 			return
 		}
 	}
@@ -321,7 +321,7 @@ func TestRun_Segmentation_RotatesEveryInterval(t *testing.T) {
 			t.Errorf("stat %s: %v", m, err)
 			continue
 		}
-		if info.Size() <= 44 {
+		if info.Size() <= int64(wav.HeaderSize) {
 			t.Errorf("%s too small (%d bytes); header-only", m, info.Size())
 		}
 	}

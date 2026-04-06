@@ -23,9 +23,11 @@ import (
 )
 
 const (
-	headerSize    = 44
+	HeaderSize    = 76
+	DataSizeOff   = 72
 	riffSizeOff   = 4
-	dataSizeOff   = 40
+	ds64BodyOff   = 20
+	maxUint32Val  = 0xFFFFFFFF
 	wavFormatPCM  = 1
 	wavFormatIEEE = 3 // WAVE_FORMAT_IEEE_FLOAT
 )
@@ -81,33 +83,63 @@ func validateFormat(f source.Format) error {
 	return nil
 }
 
-// writeHeader writes the canonical 44-byte PCM header at offset 0. The caller
-// must hold w.mu. Length fields reflect w.bytesWritten.
+// writeHeader writes the 76-byte RF64-compatible PCM header at offset 0. The
+// caller must hold w.mu. Includes a ds64 chunk and writes RF64 magic if the file
+// exceeds 4GB. Length fields reflect w.bytesWritten.
 func (w *Writer) writeHeader() error {
-	var h [headerSize]byte
-	copy(h[0:4], "RIFF")
-	binary.LittleEndian.PutUint32(h[4:8], uint32(36+w.bytesWritten))
+	var h [HeaderSize]byte
+
+	// Determine if this is an RF64 file (>4GB).
+	isRF64 := w.bytesWritten > maxUint32Val
+
+	// RIFF/RF64 chunk ID and size
+	if isRF64 {
+		copy(h[0:4], "RF64")
+		binary.LittleEndian.PutUint32(h[4:8], maxUint32Val)
+	} else {
+		copy(h[0:4], "RIFF")
+		binary.LittleEndian.PutUint32(h[4:8], uint32(68+w.bytesWritten))
+	}
+
+	// WAVE format
 	copy(h[8:12], "WAVE")
-	copy(h[12:16], "fmt ")
-	binary.LittleEndian.PutUint32(h[16:20], 16) // PCM fmt chunk size
+
+	// ds64 chunk for RF64 support
+	copy(h[12:16], "ds64")
+	binary.LittleEndian.PutUint32(h[16:20], 24) // ds64 chunk body size
+
+	// ds64 chunk body: 64-bit sizes (always populated, even under 4GB)
+	binary.LittleEndian.PutUint64(h[20:28], uint64(68+w.bytesWritten)) // riffSize64
+	binary.LittleEndian.PutUint64(h[28:36], uint64(w.bytesWritten))    // dataSize64
+	sampleCount := w.bytesWritten / int64(w.fmt.BytesPerFrame())
+	binary.LittleEndian.PutUint64(h[36:44], uint64(sampleCount)) // sampleCount64
+
+	// fmt  chunk
+	copy(h[44:48], "fmt ")
+	binary.LittleEndian.PutUint32(h[48:52], 16) // PCM fmt chunk size
 
 	format := uint16(wavFormatPCM)
 	if w.fmt.Float {
 		format = wavFormatIEEE
 	}
-	binary.LittleEndian.PutUint16(h[20:22], format)
-	binary.LittleEndian.PutUint16(h[22:24], uint16(w.fmt.Channels))
-	binary.LittleEndian.PutUint32(h[24:28], uint32(w.fmt.SampleRate))
+	binary.LittleEndian.PutUint16(h[52:54], format)
+	binary.LittleEndian.PutUint16(h[54:56], uint16(w.fmt.Channels))
+	binary.LittleEndian.PutUint32(h[56:60], uint32(w.fmt.SampleRate))
 
 	byteRate := uint32(w.fmt.SampleRate * w.fmt.Channels * (w.fmt.BitsPerSample / 8))
-	binary.LittleEndian.PutUint32(h[28:32], byteRate)
+	binary.LittleEndian.PutUint32(h[60:64], byteRate)
 
 	blockAlign := uint16(w.fmt.Channels * (w.fmt.BitsPerSample / 8))
-	binary.LittleEndian.PutUint16(h[32:34], blockAlign)
-	binary.LittleEndian.PutUint16(h[34:36], uint16(w.fmt.BitsPerSample))
+	binary.LittleEndian.PutUint16(h[64:66], blockAlign)
+	binary.LittleEndian.PutUint16(h[66:68], uint16(w.fmt.BitsPerSample))
 
-	copy(h[36:40], "data")
-	binary.LittleEndian.PutUint32(h[40:44], uint32(w.bytesWritten))
+	// data chunk
+	copy(h[68:72], "data")
+	if isRF64 {
+		binary.LittleEndian.PutUint32(h[72:76], maxUint32Val)
+	} else {
+		binary.LittleEndian.PutUint32(h[72:76], uint32(w.bytesWritten))
+	}
 
 	if _, err := w.f.WriteAt(h[:], 0); err != nil {
 		return fmt.Errorf("wav: write header: %w", err)
@@ -147,7 +179,7 @@ func (w *Writer) WriteFrame(f source.Frame) error {
 		return fmt.Errorf("wav: frame data length %d not a multiple of block align %d",
 			len(f.Data), blockAlign)
 	}
-	n, err := w.f.WriteAt(f.Data, headerSize+w.bytesWritten)
+	n, err := w.f.WriteAt(f.Data, HeaderSize+w.bytesWritten)
 	if err != nil {
 		return fmt.Errorf("wav: write frame: %w", err)
 	}
