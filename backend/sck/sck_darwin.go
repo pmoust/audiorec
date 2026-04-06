@@ -49,15 +49,16 @@ type SystemAudioConfig struct {
 
 // Capture is the darwin ScreenCaptureKit-backed system-audio Source.
 type Capture struct {
-	mu      sync.Mutex
-	handle  *C.sck_capture_t
-	frames  chan source.Frame
-	format  source.Format
-	config  SystemAudioConfig
-	err     error
-	started bool
-	closed  bool
-	closeCh chan struct{}
+	mu          sync.Mutex
+	handle      *C.sck_capture_t
+	frames      chan source.Frame
+	format      source.Format
+	formatReady chan struct{} // closed when the first audio callback sets the format
+	config      SystemAudioConfig
+	err         error
+	started     bool
+	closed      bool
+	closeCh     chan struct{}
 }
 
 // NewSystemAudio returns an un-started macOS system-audio Source. The
@@ -115,7 +116,9 @@ func audiorecSCKAudioCallback(data *C.float, numFrames C.int, channels C.int, sa
 	if nf <= 0 || ch <= 0 {
 		return
 	}
-	// One-time format publish.
+	// One-time format publish. The first callback to arrive sets the format
+	// and signals formatReady so Start() can unblock and return a stable
+	// Format() to the caller.
 	c.mu.Lock()
 	if c.format.SampleRate == 0 {
 		c.format = source.Format{
@@ -123,6 +126,9 @@ func audiorecSCKAudioCallback(data *C.float, numFrames C.int, channels C.int, sa
 			Channels:      ch,
 			BitsPerSample: 32,
 			Float:         true,
+		}
+		if c.formatReady != nil {
+			close(c.formatReady)
 		}
 	}
 	c.mu.Unlock()
@@ -168,6 +174,7 @@ func (c *Capture) Start(ctx context.Context) error {
 
 	c.frames = make(chan source.Frame, 32)
 	c.closeCh = make(chan struct{})
+	c.formatReady = make(chan struct{})
 
 	id := register(c)
 	c.handle = C.audiorec_sck_create_id(C.uintptr_t(id))
@@ -229,6 +236,23 @@ func (c *Capture) Start(ctx context.Context) error {
 		}
 		c.teardown(id)
 	}()
+
+	// Wait for the first audio callback to fire and set the format.
+	// The Source contract requires Format() to be stable after Start()
+	// returns. Without this wait, the session calls Format() before
+	// ScreenCaptureKit delivers its first audio buffer, gets a zero-
+	// value Format (SampleRate=0), and wav.Create rejects it.
+	select {
+	case <-c.formatReady:
+		// Format is now stable.
+	case <-time.After(5 * time.Second):
+		c.teardown(id)
+		return fmt.Errorf("%w: timeout waiting for first audio frame from ScreenCaptureKit", source.ErrPermissionDenied)
+	case <-ctx.Done():
+		c.teardown(id)
+		return ctx.Err()
+	}
+
 	return nil
 }
 
