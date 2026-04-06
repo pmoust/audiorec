@@ -1,3 +1,9 @@
+---
+layout: default
+title: User Guide
+nav_order: 2
+---
+
 # audiorec User Guide
 
 `audiorec` is a command-line tool that records your microphone and your computer's system audio to **separate files**. It's designed for meeting and interview capture: you get one clean track of your own voice and one clean track of the other side, both ready to drop into a transcription tool, a DAW, or a ducking pipeline. Output formats include uncompressed WAV, lossless FLAC, and lossy Opus.

@@ -1,5 +1,18 @@
 title: audiorec
-description: Record microphone + system audio as separate crash-safe files
-remote_theme: pages-themes/minimal@v0.2.0
+description: Record microphone + system audio as separate crash-safe files on macOS and Linux
+remote_theme: just-the-docs/just-the-docs@v0.10.1
+color_scheme: dark
+
 plugins:
   - jekyll-remote-theme
+
+aux_links:
+  GitHub: https://github.com/pmoust/audiorec
+  Releases: https://github.com/pmoust/audiorec/releases
+
+footer_content: "audiorec is open source under the <a href=\"https://github.com/pmoust/audiorec/blob/main/LICENSE\">MIT License</a>."
+
+nav_enabled: true
+
+exclude:
+  - superpowers/
