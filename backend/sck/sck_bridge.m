@@ -34,39 +34,71 @@ struct sck_capture {
 
     int channels = (int)asbd->mChannelsPerFrame;
     int sampleRate = (int)asbd->mSampleRate;
-    BOOL isNonInterleaved = (asbd->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
-
-    CMBlockBufferRef block = CMSampleBufferGetDataBuffer(sampleBuffer);
-    if (block == NULL) return;
-
-    size_t totalLength = 0;
-    char* data = NULL;
-    OSStatus s = CMBlockBufferGetDataPointer(block, 0, NULL, &totalLength, &data);
-    if (s != kCMBlockBufferNoErr || data == NULL) return;
-
     int numFrames = (int)CMSampleBufferGetNumSamples(sampleBuffer);
-    if (numFrames <= 0) return;
+    if (numFrames <= 0 || channels <= 0) return;
 
-    if (isNonInterleaved && channels > 1) {
-        // ScreenCaptureKit delivered planar audio: each channel's samples
-        // are laid out contiguously [ch0_0..ch0_N-1, ch1_0..ch1_N-1, ...].
-        // Interleave to [ch0_0, ch1_0, ch0_1, ch1_1, ...] before passing
-        // to the Go callback, which expects interleaved PCM.
-        size_t interleavedBytes = (size_t)(numFrames * channels) * sizeof(float);
-        float* interleaved = (float*)malloc(interleavedBytes);
-        if (interleaved == NULL) return;
+    // Use AudioBufferList to correctly handle both interleaved and
+    // non-interleaved (planar) audio. CMBlockBufferGetDataPointer is
+    // unreliable for non-interleaved formats because CoreAudio may
+    // store each channel in a separate AudioBuffer with its own
+    // memory region.
+    //
+    // For stereo (max we support): the ABL has either 1 buffer
+    // (interleaved, mNumberChannels=2) or 2 buffers (non-interleaved,
+    // each mNumberChannels=1). We always produce interleaved output
+    // for the Go callback.
 
-        const float* src = (const float*)data;
-        for (int f = 0; f < numFrames; f++) {
+    // Stack-allocate enough room for up to 2 AudioBuffers.
+    // AudioBufferList has 1 buffer inline; we add room for 1 more.
+    struct {
+        AudioBufferList abl;
+        AudioBuffer extra;
+    } ablStorage;
+    memset(&ablStorage, 0, sizeof(ablStorage));
+
+    size_t ablSize = sizeof(ablStorage);
+    CMBlockBufferRef blockBuf = NULL;
+
+    OSStatus status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        sampleBuffer,
+        &ablSize,
+        &ablStorage.abl,
+        sizeof(ablStorage),
+        NULL, NULL,
+        kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+        &blockBuf
+    );
+    if (status != noErr) return;
+
+    AudioBufferList* abl = &ablStorage.abl;
+
+    if (abl->mNumberBuffers == 1 && (int)abl->mBuffers[0].mNumberChannels == channels) {
+        // Interleaved (or mono): single buffer with all channels.
+        // Pass directly — no conversion needed.
+        self.owner->cb(
+            (const float*)abl->mBuffers[0].mData,
+            numFrames, channels, sampleRate, self.owner->user
+        );
+    } else if ((int)abl->mNumberBuffers == channels) {
+        // Non-interleaved: one buffer per channel, each mono.
+        // Interleave into a contiguous output buffer.
+        size_t outBytes = (size_t)(numFrames * channels) * sizeof(float);
+        float* interleaved = (float*)malloc(outBytes);
+        if (interleaved != NULL) {
             for (int c = 0; c < channels; c++) {
-                interleaved[f * channels + c] = src[c * numFrames + f];
+                const float* src = (const float*)abl->mBuffers[c].mData;
+                for (int f = 0; f < numFrames; f++) {
+                    interleaved[f * channels + c] = src[f];
+                }
             }
+            self.owner->cb(interleaved, numFrames, channels, sampleRate, self.owner->user);
+            free(interleaved);
         }
-        self.owner->cb(interleaved, numFrames, channels, sampleRate, self.owner->user);
-        free(interleaved);
-    } else {
-        // Already interleaved (or mono — interleaving is a no-op).
-        self.owner->cb((const float*)data, numFrames, channels, sampleRate, self.owner->user);
+    }
+    // else: unexpected buffer layout — skip silently.
+
+    if (blockBuf != NULL) {
+        CFRelease(blockBuf);
     }
 }
 
