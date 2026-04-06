@@ -66,6 +66,10 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libopus-dev
 
+      - name: Install macOS codec headers
+        if: runner.os == 'macOS'
+        run: brew install opus opusfile
+
       - name: Test (race)
         run: go test -race -count=1 ./...
 
