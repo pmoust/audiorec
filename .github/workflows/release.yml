@@ -251,3 +251,33 @@ jobs:
               --generate-notes \
               --verify-tag
           fi
+
+  update-homebrew:
+    name: Update Homebrew formula
+    runs-on: ubuntu-latest
+    needs: [release]
+    steps:
+      - name: Update tap formula
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          echo "Updating Homebrew formula for ${TAG}"
+
+          SHA=$(curl -sL "https://github.com/pmoust/audiorec/archive/refs/tags/${TAG}.tar.gz" \
+            | sha256sum | cut -d' ' -f1)
+          echo "SHA256: ${SHA}"
+
+          gh repo clone pmoust/homebrew-audiorec /tmp/tap -- --depth 1
+          cd /tmp/tap
+
+          sed -i "s|url \".*\"|url \"https://github.com/pmoust/audiorec/archive/refs/tags/${TAG}.tar.gz\"|" Formula/audiorec.rb
+          sed -i "s|sha256 \".*\"|sha256 \"${SHA}\"|" Formula/audiorec.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/audiorec.rb
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "audiorec ${TAG}"
+          git push
