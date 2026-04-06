@@ -165,8 +165,11 @@ func (r *resampler) processInt16(inFrame source.Frame) source.Frame {
 
 			if pos < 0 && pos+1.0 >= 0 {
 				// Interpolate between prevLastSample and inData[0].
-				i0 := int(pos)           // will be -1
-				frac = pos - float64(i0) // frac = pos - (-1) = pos + 1
+				// pos is in (-1, 0): interpolate between the previous frame's
+				// last sample and the current frame's first sample. Go's int()
+				// truncates toward zero (not floor), so int(-0.9) = 0, not -1.
+				// Hardcode the math: frac = pos + 1.0 maps (-1,0) → (0,1).
+				frac = pos + 1.0
 				s0 = r.prevLastSample[ch]
 				s1 = float64(int16(binary.LittleEndian.Uint16(inData[ch*2:])))
 			} else if pos >= 0 && pos < float64(inN-1) {
@@ -246,8 +249,11 @@ func (r *resampler) processFloat32(inFrame source.Frame) source.Frame {
 
 			if pos < 0 && pos+1.0 >= 0 {
 				// Interpolate between prevLastSample and inData[0].
-				i0 := int(pos)           // will be -1
-				frac = pos - float64(i0) // frac = pos - (-1) = pos + 1
+				// pos is in (-1, 0): interpolate between the previous frame's
+				// last sample and the current frame's first sample. Go's int()
+				// truncates toward zero (not floor), so int(-0.9) = 0, not -1.
+				// Hardcode the math: frac = pos + 1.0 maps (-1,0) → (0,1).
+				frac = pos + 1.0
 				s0 = r.prevLastSample[ch]
 				s1 = float64(math.Float32frombits(binary.LittleEndian.Uint32(inData[ch*4:])))
 			} else if pos >= 0 && pos < float64(inN-1) {
