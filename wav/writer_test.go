@@ -405,6 +405,46 @@ func TestFlush_CrashSafe_RF64(t *testing.T) {
 	}
 }
 
+func TestWriteFrame_SmallFile_KeepsRIFFWithDs64Present(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "small.wav")
+	w, err := Create(path, source.Format{SampleRate: 48000, Channels: 1, BitsPerSample: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcm := make([]byte, 1000)
+	if err := w.WriteFrame(source.Frame{Data: pcm, NumFrames: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	h := readHeader(t, path)
+	// Must be RIFF, not RF64
+	if string(h[0:4]) != "RIFF" {
+		t.Errorf("chunk ID: got %q want RIFF", string(h[0:4]))
+	}
+	// ds64 chunk must be present (at offset 12)
+	if string(h[12:16]) != "ds64" {
+		t.Errorf("ds64 missing at offset 12: got %q", string(h[12:16]))
+	}
+	// 32-bit sizes must be valid (not 0xFFFFFFFF)
+	riffSize := binary.LittleEndian.Uint32(h[4:8])
+	if riffSize == 0xFFFFFFFF || riffSize == 0 {
+		t.Errorf("riff size should be a real value: got %#x", riffSize)
+	}
+	dataSize := binary.LittleEndian.Uint32(h[72:76])
+	if dataSize != 1000 {
+		t.Errorf("data size: got %d want 1000", dataSize)
+	}
+	// ds64 64-bit values should also be correct
+	ds64Data := binary.LittleEndian.Uint64(h[28:36])
+	if ds64Data != 1000 {
+		t.Errorf("ds64 dataSize: got %d want 1000", ds64Data)
+	}
+}
+
 func TestValidateFormat_Rejects(t *testing.T) {
 	cases := []source.Format{
 		{SampleRate: 0, Channels: 1, BitsPerSample: 16},
