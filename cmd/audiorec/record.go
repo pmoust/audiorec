@@ -16,6 +16,7 @@ import (
 
 	"github.com/pmoust/audiorec"
 	"github.com/pmoust/audiorec/flac"
+	"github.com/pmoust/audiorec/opus"
 	"github.com/pmoust/audiorec/resample"
 	"github.com/pmoust/audiorec/session"
 )
@@ -32,7 +33,8 @@ func runRecord(args []string) error {
 		duration        = fs.Duration("d", 0, "optional hard-stop duration (e.g. 30m); 0 = record until SIGINT")
 		flushInterval   = fs.Duration("flush-interval", 2*time.Second, "WAV header flush interval")
 		segmentDuration = fs.Duration("segment-duration", 0, "rotate per-track output files every DURATION (e.g. 10m, 1h); 0 = no segmentation")
-		format          = fs.String("format", "wav", `output format: "wav" or "flac" (note: FLAC does not support float PCM, e.g. macOS system audio)`)
+		format          = fs.String("format", "wav", `output format: "wav", "flac", or "opus" (FLAC rejects float PCM; Opus rejects float PCM in v1)`)
+		opusBitrate     = fs.String("opus-bitrate", "48k", `Opus bitrate: integer (bps) or Nk shorthand (e.g. 48k = 48000); default 48k`)
 		sampleRate      = fs.Int("sample-rate", 0, "resample all tracks to N Hz (e.g. 48000); 0 = no resampling")
 		verbose         = fs.Bool("v", false, "verbose (debug) logging")
 	)
@@ -50,8 +52,18 @@ func runRecord(args []string) error {
 	if *micFlag == "none" && *systemFlag == "none" {
 		return errors.New("at least one of --mic or --system must be enabled")
 	}
-	if *format != "wav" && *format != "flac" {
-		return fmt.Errorf("--format must be \"wav\" or \"flac\", got %q", *format)
+	if *format != "wav" && *format != "flac" && *format != "opus" {
+		return fmt.Errorf("--format must be \"wav\", \"flac\", or \"opus\", got %q", *format)
+	}
+
+	// Parse Opus bitrate if format is opus.
+	var opusBitrateValue int
+	if *format == "opus" {
+		var err error
+		opusBitrateValue, err = parseBitrate(*opusBitrate)
+		if err != nil {
+			return fmt.Errorf("--opus-bitrate: %w", err)
+		}
 	}
 	if *includeApps != "" && *excludeApps != "" {
 		return errors.New("--include-app and --exclude-app are mutually exclusive")
@@ -86,6 +98,11 @@ func runRecord(args []string) error {
 		fileExt = ".flac"
 		writerFactory = func(path string, f audiorec.Format) (session.Writer, error) {
 			return flac.Create(path, f)
+		}
+	case "opus":
+		fileExt = ".opus"
+		writerFactory = func(path string, f audiorec.Format) (session.Writer, error) {
+			return opus.Create(path, f, opus.WithBitrate(opusBitrateValue))
 		}
 	}
 
@@ -208,4 +225,28 @@ func parseCommaSeparated(s string) []string {
 		}
 	}
 	return result
+}
+
+// parseBitrate parses a bitrate string: either an integer (bps) or Nk shorthand (e.g. "48k").
+func parseBitrate(s string) (int, error) {
+	s = strings.TrimSpace(s)
+
+	// Check for 'k' suffix.
+	if strings.HasSuffix(s, "k") || strings.HasSuffix(s, "K") {
+		numStr := s[:len(s)-1]
+		var num int
+		_, err := fmt.Sscanf(numStr, "%d", &num)
+		if err != nil {
+			return 0, fmt.Errorf("invalid bitrate format %q: %w", s, err)
+		}
+		return num * 1000, nil
+	}
+
+	// Otherwise, parse as plain integer.
+	var num int
+	_, err := fmt.Sscanf(s, "%d", &num)
+	if err != nil {
+		return 0, fmt.Errorf("invalid bitrate format %q: %w", s, err)
+	}
+	return num, nil
 }

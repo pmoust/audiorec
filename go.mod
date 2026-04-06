@@ -5,6 +5,7 @@ go 1.25.4
 require (
 	github.com/gen2brain/malgo v0.11.24
 	github.com/mewkiz/flac v1.0.13
+	gopkg.in/hraban/opus.v2 v2.0.0-20230925203106-0188a62cb302
 )
 
 require (
