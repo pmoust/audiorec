@@ -95,6 +95,10 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libopus-dev
 
+      - name: Install macOS codec headers
+        if: runner.os == 'macOS'
+        run: brew install opus opusfile
+
       - name: Resolve release tag
         id: tag
         run: |
@@ -143,6 +147,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Install macOS codec headers
+        run: brew install opus opusfile
 
       - name: Resolve release tag
         id: tag

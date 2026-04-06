@@ -47,6 +47,11 @@ func Create(path string, f source.Format, opts ...Option) (*Writer, error) {
 	if f.Channels < 1 || f.Channels > 2 {
 		return nil, fmt.Errorf("%w: opus supports 1-2 channels, got %d", source.ErrUnsupportedFormat, f.Channels)
 	}
+	// Opus encoding path currently expects int16 PCM input. Float32 sources
+	// (e.g. macOS system audio via ScreenCaptureKit) are not yet supported.
+	if f.Float {
+		return nil, fmt.Errorf("%w: opus writer does not yet support float32 PCM; use --format wav or --format flac for float sources", source.ErrUnsupportedFormat)
+	}
 
 	// Open file.
 	file, err := os.Create(path)
@@ -328,7 +333,7 @@ func (w *Writer) resampleAndConvert(sf source.Frame) []byte {
 }
 
 // bytesToFloat32 converts byte slice to float32 interleaved PCM.
-func (w *Writer) bytesToFloat32(data []byte, channels int) []float32 {
+func (w *Writer) bytesToFloat32(data []byte, _ int) []float32 {
 	result := make([]float32, 0, len(data)/2)
 	for i := 0; i < len(data); i += 2 {
 		lo := int16(data[i])
@@ -339,42 +344,34 @@ func (w *Writer) bytesToFloat32(data []byte, channels int) []float32 {
 	return result
 }
 
-// resample resamples float32 samples from source rate to 48kHz using linear interpolation.
+// resample resamples float32 samples from source rate to 48kHz using
+// linear interpolation. The fractional position w.resamplePos carries
+// across calls so there are no phase discontinuities at frame boundaries.
 func (w *Writer) resample(input []float32, channels int) []float32 {
 	if !w.needsResample {
 		return input
 	}
 
-	// Calculate output sample count.
 	inputCount := len(input) / channels
-	outputCount := int(float64(inputCount)*w.resampleRatio + 0.5)
-	output := make([]float32, 0, outputCount*channels)
+	invRatio := 1.0 / w.resampleRatio // input-sample step per output sample
+	output := make([]float32, 0, int(float64(inputCount)*w.resampleRatio+1)*channels)
 
-	// Resample each sample position.
-	for outSample := 0; outSample < outputCount; outSample++ {
-		inPos := float64(outSample) / w.resampleRatio
-		inIdx := int(inPos)
-
-		// Linear interpolation.
-		for ch := 0; ch < channels; ch++ {
-			if inIdx >= inputCount-1 {
-				// Past the end, use last sample or zero.
-				if inIdx < inputCount {
-					output = append(output, input[inIdx*channels+ch])
-				} else {
-					output = append(output, 0)
-				}
-				continue
-			}
-
-			// Interpolate between inIdx and inIdx+1.
-			frac := float32(inPos - float64(inIdx))
+	pos := w.resamplePos
+	for {
+		inIdx := int(pos)
+		if inIdx >= inputCount-1 {
+			break
+		}
+		frac := float32(pos - float64(inIdx))
+		for ch := range channels {
 			s0 := input[inIdx*channels+ch]
 			s1 := input[(inIdx+1)*channels+ch]
-			interpolated := s0 + frac*(s1-s0)
-			output = append(output, interpolated)
+			output = append(output, s0+frac*(s1-s0))
 		}
+		pos += invRatio
 	}
+	// Carry fractional position for the next call.
+	w.resamplePos = pos - float64(inputCount)
 
 	return output
 }

@@ -187,7 +187,7 @@ func TestMultiplePages(t *testing.T) {
 
 	// Count pages by searching for "OggS" patterns.
 	count := 0
-	for i := 0; i < len(pages)-3; i++ {
+	for i := range len(pages) - 3 {
 		if string(pages[i:i+4]) == "OggS" {
 			count++
 		}
@@ -222,7 +222,7 @@ func TestLargeData(t *testing.T) {
 
 	// Verify segment table sums to at least 1000.
 	payloadSize := 0
-	for i := 0; i < segmentCount; i++ {
+	for i := range segmentCount {
 		payloadSize += int(page[27+i])
 	}
 	if payloadSize != 1000 {
@@ -236,8 +236,8 @@ func BenchmarkWritePage(b *testing.B) {
 	data := bytes.Repeat([]byte{0x42}, 1000)
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for n := range b.N {
 		buf.Reset()
-		_ = pw.WritePage(int64(i), data)
+		_ = pw.WritePage(int64(n), data)
 	}
 }

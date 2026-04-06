@@ -49,7 +49,7 @@ func TestWriteFrame_MonoInt16_ProducesValidOgg(t *testing.T) {
 	numFrames := 48000 / frameSize
 	pcm := make([]byte, 960*2) // 960 samples * 1 channel * 2 bytes
 
-	for i := 0; i < numFrames; i++ {
+	for range numFrames {
 		frame := source.Frame{
 			Data:      pcm,
 			NumFrames: frameSize,
@@ -80,7 +80,7 @@ func TestWriteFrame_MonoInt16_ProducesValidOgg(t *testing.T) {
 
 	// Count Ogg pages.
 	pageCount := 0
-	for i := 0; i < len(data)-3; i++ {
+	for i := range len(data) - 3 {
 		if string(data[i:i+4]) == "OggS" {
 			pageCount++
 		}
@@ -105,7 +105,7 @@ func TestWriteFrame_MonoInt16_ProducesValidOgg(t *testing.T) {
 	// Verify EOS flag on last page (0x04).
 	// Find last OggS.
 	lastOggS := -1
-	for i := 0; i < len(data)-3; i++ {
+	for i := range len(data) - 3 {
 		if string(data[i:i+4]) == "OggS" {
 			lastOggS = i
 		}
@@ -187,7 +187,7 @@ func TestWriteFrame_Resample44100to48000(t *testing.T) {
 	numFrames := 10
 	pcm := make([]byte, frameSize*2) // frameSize samples * 1 channel * 2 bytes
 
-	for i := 0; i < numFrames; i++ {
+	for range numFrames {
 		frame := source.Frame{
 			Data:      pcm,
 			NumFrames: frameSize,
@@ -260,7 +260,7 @@ func TestFlush_PadsPartialFrame(t *testing.T) {
 
 	// Verify at least one encoded packet was written (beyond headers).
 	pageCount := 0
-	for i := 0; i < len(data)-3; i++ {
+	for i := range len(data) - 3 {
 		if string(data[i:i+4]) == "OggS" {
 			pageCount++
 		}
@@ -357,7 +357,7 @@ func BenchmarkWrite(b *testing.B) {
 	pcm := make([]byte, frameSize*2)
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		frame := source.Frame{
 			Data:      pcm,
 			NumFrames: frameSize,
