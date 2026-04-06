@@ -32,6 +32,10 @@ struct sck_capture {
     const AudioStreamBasicDescription* asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fmt);
     if (asbd == NULL) return;
 
+    int channels = (int)asbd->mChannelsPerFrame;
+    int sampleRate = (int)asbd->mSampleRate;
+    BOOL isNonInterleaved = (asbd->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
+
     CMBlockBufferRef block = CMSampleBufferGetDataBuffer(sampleBuffer);
     if (block == NULL) return;
 
@@ -40,12 +44,30 @@ struct sck_capture {
     OSStatus s = CMBlockBufferGetDataPointer(block, 0, NULL, &totalLength, &data);
     if (s != kCMBlockBufferNoErr || data == NULL) return;
 
-    int channels = (int)asbd->mChannelsPerFrame;
-    int sampleRate = (int)asbd->mSampleRate;
-    int bytesPerFrame = channels * (int)sizeof(float);
-    int numFrames = bytesPerFrame > 0 ? (int)(totalLength / bytesPerFrame) : 0;
+    int numFrames = (int)CMSampleBufferGetNumSamples(sampleBuffer);
+    if (numFrames <= 0) return;
 
-    self.owner->cb((const float*)data, numFrames, channels, sampleRate, self.owner->user);
+    if (isNonInterleaved && channels > 1) {
+        // ScreenCaptureKit delivered planar audio: each channel's samples
+        // are laid out contiguously [ch0_0..ch0_N-1, ch1_0..ch1_N-1, ...].
+        // Interleave to [ch0_0, ch1_0, ch0_1, ch1_1, ...] before passing
+        // to the Go callback, which expects interleaved PCM.
+        size_t interleavedBytes = (size_t)(numFrames * channels) * sizeof(float);
+        float* interleaved = (float*)malloc(interleavedBytes);
+        if (interleaved == NULL) return;
+
+        const float* src = (const float*)data;
+        for (int f = 0; f < numFrames; f++) {
+            for (int c = 0; c < channels; c++) {
+                interleaved[f * channels + c] = src[c * numFrames + f];
+            }
+        }
+        self.owner->cb(interleaved, numFrames, channels, sampleRate, self.owner->user);
+        free(interleaved);
+    } else {
+        // Already interleaved (or mono — interleaving is a no-op).
+        self.owner->cb((const float*)data, numFrames, channels, sampleRate, self.owner->user);
+    }
 }
 
 - (void)stream:(SCStream*)stream didStopWithError:(NSError*)error {
