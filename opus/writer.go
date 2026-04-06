@@ -128,9 +128,41 @@ func (w *Writer) WriteFrame(sf source.Frame) error {
 		return nil
 	}
 
-	// TODO: Handle resampling if needed.
-	// TODO: Append to buffer, accumulate frames, encode when full.
-	// TODO: Write Ogg pages.
+	// If resampling is needed, resample first.
+	var pcmData []byte
+	if w.needsResample {
+		pcmData = w.resampleAndConvert(sf)
+	} else {
+		pcmData = sf.Data
+	}
+
+	// Append PCM to buffer.
+	w.buf = append(w.buf, pcmData...)
+
+	// Encode full frames (960 samples per channel).
+	frameBytes := w.frameSize * w.fmt.Channels * 2 // 2 bytes per sample (int16)
+	for len(w.buf) >= frameBytes {
+		// Extract one frame.
+		frame := w.buf[:frameBytes]
+		w.buf = w.buf[frameBytes:]
+
+		// Convert bytes to int16 slice.
+		pcm := bytesToInt16(frame)
+
+		// Encode.
+		encoded := make([]byte, 4096)
+		n, err := w.enc.Encode(pcm, encoded)
+		if err != nil {
+			return fmt.Errorf("opus: encode: %w", err)
+		}
+
+		// Write to Ogg page.
+		if err := w.ogg.WritePage(w.granule, encoded[:n]); err != nil {
+			return fmt.Errorf("opus: write page: %w", err)
+		}
+
+		w.granule += int64(w.frameSize)
+	}
 
 	return nil
 }
@@ -143,9 +175,31 @@ func (w *Writer) Flush() error {
 		return errors.New("opus: Flush on closed writer")
 	}
 
-	// TODO: Pad partial frame, encode, write.
-	// TODO: Fsync.
+	// If there's a partial frame, pad with silence and encode.
+	frameBytes := w.frameSize * w.fmt.Channels * 2 // 2 bytes per sample (int16)
+	if len(w.buf) > 0 {
+		// Pad with silence.
+		padding := make([]byte, frameBytes-len(w.buf))
+		w.buf = append(w.buf, padding...)
 
+		// Convert to int16 and encode.
+		pcm := bytesToInt16(w.buf)
+		encoded := make([]byte, 4096)
+		n, err := w.enc.Encode(pcm, encoded)
+		if err != nil {
+			return fmt.Errorf("opus: flush encode: %w", err)
+		}
+
+		// Write to Ogg page.
+		if err := w.ogg.WritePage(w.granule, encoded[:n]); err != nil {
+			return fmt.Errorf("opus: flush write page: %w", err)
+		}
+
+		w.granule += int64(w.frameSize)
+		w.buf = w.buf[:0] // clear buffer
+	}
+
+	// Fsync.
 	if err := w.f.Sync(); err != nil {
 		return fmt.Errorf("opus: flush sync: %w", err)
 	}
@@ -161,8 +215,33 @@ func (w *Writer) Close() error {
 	}
 	w.closed = true
 
-	// Flush any buffered data.
-	// TODO: Write EOS page.
+	// Flush any buffered data (encode and write partial frame).
+	frameBytes := w.frameSize * w.fmt.Channels * 2 // 2 bytes per sample (int16)
+	if len(w.buf) > 0 {
+		// Pad with silence.
+		padding := make([]byte, frameBytes-len(w.buf))
+		w.buf = append(w.buf, padding...)
+
+		// Convert to int16 and encode.
+		pcm := bytesToInt16(w.buf)
+		encoded := make([]byte, 4096)
+		n, err := w.enc.Encode(pcm, encoded)
+		if err != nil {
+			return fmt.Errorf("opus: close encode: %w", err)
+		}
+
+		// Write to Ogg page.
+		if err := w.ogg.WritePage(w.granule, encoded[:n]); err != nil {
+			return fmt.Errorf("opus: close write page: %w", err)
+		}
+
+		w.granule += int64(w.frameSize)
+	}
+
+	// Write EOS page.
+	if err := w.ogg.WriteEOS(w.granule); err != nil {
+		return fmt.Errorf("opus: write EOS: %w", err)
+	}
 
 	// Sync and close file.
 	syncErr := w.f.Sync()
@@ -222,4 +301,92 @@ func writeOpusTags(pw *ogg.PageWriter) error {
 	tags[offset], tags[offset+1], tags[offset+2], tags[offset+3] = 0, 0, 0, 0
 
 	return pw.WritePage(0, tags)
+}
+
+// bytesToInt16 converts a byte slice to an int16 slice (little-endian).
+func bytesToInt16(data []byte) []int16 {
+	result := make([]int16, len(data)/2)
+	for i := 0; i < len(result); i++ {
+		lo := int16(data[i*2])
+		hi := int16(int8(data[i*2+1])) // Sign-extend MSB
+		result[i] = (hi << 8) | (lo & 0xFF)
+	}
+	return result
+}
+
+// resampleAndConvert resamples PCM from source rate to 48kHz using linear interpolation
+// and returns it as little-endian int16 bytes.
+func (w *Writer) resampleAndConvert(sf source.Frame) []byte {
+	// Input: PCM at source rate, convert to float32 interleaved.
+	inputSamples := w.bytesToFloat32(sf.Data, w.fmt.Channels)
+
+	// Resample to 48kHz.
+	outputSamples := w.resample(inputSamples, w.fmt.Channels)
+
+	// Convert float32 back to int16 bytes (little-endian).
+	return w.float32ToBytes(outputSamples)
+}
+
+// bytesToFloat32 converts byte slice to float32 interleaved PCM.
+func (w *Writer) bytesToFloat32(data []byte, channels int) []float32 {
+	result := make([]float32, 0, len(data)/2)
+	for i := 0; i < len(data); i += 2 {
+		lo := int16(data[i])
+		hi := int16(int8(data[i+1]))
+		sample := (hi << 8) | (lo & 0xFF)
+		result = append(result, float32(sample)/32768.0)
+	}
+	return result
+}
+
+// resample resamples float32 samples from source rate to 48kHz using linear interpolation.
+func (w *Writer) resample(input []float32, channels int) []float32 {
+	if !w.needsResample {
+		return input
+	}
+
+	// Calculate output sample count.
+	inputCount := len(input) / channels
+	outputCount := int(float64(inputCount)*w.resampleRatio + 0.5)
+	output := make([]float32, 0, outputCount*channels)
+
+	// Resample each sample position.
+	for outSample := 0; outSample < outputCount; outSample++ {
+		inPos := float64(outSample) / w.resampleRatio
+		inIdx := int(inPos)
+
+		// Linear interpolation.
+		for ch := 0; ch < channels; ch++ {
+			if inIdx >= inputCount-1 {
+				// Past the end, use last sample or zero.
+				if inIdx < inputCount {
+					output = append(output, input[inIdx*channels+ch])
+				} else {
+					output = append(output, 0)
+				}
+				continue
+			}
+
+			// Interpolate between inIdx and inIdx+1.
+			frac := float32(inPos - float64(inIdx))
+			s0 := input[inIdx*channels+ch]
+			s1 := input[(inIdx+1)*channels+ch]
+			interpolated := s0 + frac*(s1-s0)
+			output = append(output, interpolated)
+		}
+	}
+
+	return output
+}
+
+// float32ToBytes converts float32 samples back to int16 bytes (little-endian).
+func (w *Writer) float32ToBytes(samples []float32) []byte {
+	result := make([]byte, len(samples)*2)
+	for i, sample := range samples {
+		// Clamp to int16 range.
+		val := int16(sample * 32767.0)
+		result[i*2] = byte(val & 0xFF)
+		result[i*2+1] = byte((val >> 8) & 0xFF)
+	}
+	return result
 }
