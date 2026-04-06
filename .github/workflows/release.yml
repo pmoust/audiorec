@@ -272,6 +272,10 @@ jobs:
           gh repo clone pmoust/homebrew-audiorec /tmp/tap -- --depth 1
           cd /tmp/tap
 
+          # Configure git to use the PAT for push (gh clone uses GH_TOKEN
+          # for the clone but git push needs explicit credential config).
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/pmoust/homebrew-audiorec.git"
+
           sed -i "s|url \".*\"|url \"https://github.com/pmoust/audiorec/archive/refs/tags/${TAG}.tar.gz\"|" Formula/audiorec.rb
           sed -i "s|sha256 \".*\"|sha256 \"${SHA}\"|" Formula/audiorec.rb
 
