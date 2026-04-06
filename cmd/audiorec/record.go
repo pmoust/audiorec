@@ -16,6 +16,7 @@ import (
 
 	"github.com/pmoust/audiorec"
 	"github.com/pmoust/audiorec/flac"
+	"github.com/pmoust/audiorec/resample"
 	"github.com/pmoust/audiorec/session"
 )
 
@@ -32,6 +33,7 @@ func runRecord(args []string) error {
 		flushInterval   = fs.Duration("flush-interval", 2*time.Second, "WAV header flush interval")
 		segmentDuration = fs.Duration("segment-duration", 0, "rotate per-track output files every DURATION (e.g. 10m, 1h); 0 = no segmentation")
 		format          = fs.String("format", "wav", `output format: "wav" or "flac" (note: FLAC does not support float PCM, e.g. macOS system audio)`)
+		sampleRate      = fs.Int("sample-rate", 0, "resample all tracks to N Hz (e.g. 48000); 0 = no resampling")
 		verbose         = fs.Bool("v", false, "verbose (debug) logging")
 	)
 	fs.Usage = func() {
@@ -99,7 +101,10 @@ func runRecord(args []string) error {
 				return fmt.Errorf("resolve --mic %q: %w", *micFlag, err)
 			}
 		}
-		mic := audiorec.NewMicCapture(cfg)
+		var mic audiorec.Source = audiorec.NewMicCapture(cfg)
+		if *sampleRate > 0 {
+			mic = resample.Wrap(mic, *sampleRate)
+		}
 		tracks = append(tracks, audiorec.Track{
 			Source: mic,
 			Path:   filepath.Join(sessDir, "mic"+fileExt),
@@ -116,8 +121,12 @@ func runRecord(args []string) error {
 			if err != nil {
 				return fmt.Errorf("resolve --system %q: %w", *systemFlag, err)
 			}
+			var sys audiorec.Source = audiorec.NewMicCapture(cfg) // malgo capture works for monitor devices too
+			if *sampleRate > 0 {
+				sys = resample.Wrap(sys, *sampleRate)
+			}
 			tracks = append(tracks, audiorec.Track{
-				Source: audiorec.NewMicCapture(cfg), // malgo capture works for monitor devices too
+				Source: sys,
 				Path:   filepath.Join(sessDir, "system"+fileExt),
 				Label:  "system",
 			})
@@ -135,6 +144,9 @@ func runRecord(args []string) error {
 				sys = audiorec.NewSystemAudioCaptureWithConfig(config)
 			} else {
 				sys = audiorec.NewSystemAudioCapture()
+			}
+			if *sampleRate > 0 {
+				sys = resample.Wrap(sys, *sampleRate)
 			}
 			tracks = append(tracks, audiorec.Track{
 				Source: sys,
