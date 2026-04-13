@@ -133,7 +133,7 @@ jobs:
           ls -la dist/
 
       - name: Attest build provenance (tarball)
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/audiorec-${{ steps.tag.outputs.tag }}-${{ matrix.target }}.tar.gz
 
@@ -192,7 +192,7 @@ jobs:
           ls -la
 
       - name: Attest build provenance (app bundle)
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/audiorec-${{ steps.tag.outputs.tag }}-darwin-arm64-app.zip
 
