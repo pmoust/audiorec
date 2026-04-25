@@ -37,6 +37,7 @@ struct sck_capture {
     int numFrames = (int)CMSampleBufferGetNumSamples(sampleBuffer);
     if (numFrames <= 0 || channels <= 0) return;
 
+
     // Use AudioBufferList to correctly handle both interleaved and
     // non-interleaved (planar) audio. CMBlockBufferGetDataPointer is
     // unreliable for non-interleaved formats because CoreAudio may
